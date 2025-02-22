@@ -1,12 +1,13 @@
 import json
 import os
+import argparse
 
 class WebConfig:
     _default_config = {
         "browser": "chrome",
         "profiles_path": "/path/to/profiles",
-        "timeout": 30,
-        "crawl_size": 100000
+        "crawl_size": 1000,
+        "part": 200
     }
 
     _config_file = "config.json"
@@ -45,15 +46,6 @@ class WebConfig:
         self.save_config()
 
     @property
-    def timeout(self):
-        return self._config.get("timeout", self._default_config["timeout"])
-
-    @timeout.setter
-    def timeout(self, value):
-        self._config["timeout"] = value
-        self.save_config()
-
-    @property
     def crawl_size(self):
         return self._config.get("crawl_size", self._default_config["crawl_size"])
 
@@ -62,22 +54,30 @@ class WebConfig:
         self._config["crawl_size"] = value
         self.save_config()
 
+    @property
+    def part(self):
+        return self._config.get("part", self._default_config["part"])
+
+    @part.setter
+    def part(self, value):
+        self._config["part"] = value
+        self.save_config()
+
 
 if __name__ == "__main__":
-    config = WebConfig()
+    parse = argparse.ArgumentParser()
 
+    parse.add_argument('--crawl_size', type=int, default=1000)
+    parse.add_argument('--part', type=str, default=200)
+    parse.add_argument('--browser')
+    parse.add_argument('--profiles_path')
 
-    print("Current Browser:", config.browser)
-    print("Current Profiles Path:", config.profiles_path)
-    print("Current Timeout:", config.timeout)
+    args = vars(parse.parse_args())
 
+    webconfig = WebConfig()
+    webconfig.browser = args['browser']
+    webconfig.profiles_path = args['profiles_path']
+    webconfig.crawl_size = args['crawl_size']
+    webconfig.part = args['part']
 
-    config.browser = "Firefox"
-    config.profiles_path = "D:\\PKUHoleCrawler-master\\Profiles\\32fy5laa.default-release"
-    config.timeout = 60
-    config.crawl_size = 10000
-
-
-    print("Updated Browser:", config.browser)
-    print("Updated Profiles Path:", config.profiles_path)
-    print("Updated Timeout:", config.timeout)
+    
