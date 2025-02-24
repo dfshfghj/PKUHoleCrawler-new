@@ -1,5 +1,8 @@
 **/__pycache__
 *.html
 config.json
+*.log
 Profiles/*
 temp/*
+download/*
+data/download/*

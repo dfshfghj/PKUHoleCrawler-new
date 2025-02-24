@@ -7,7 +7,8 @@ class WebConfig:
         "browser": "chrome",
         "profiles_path": "/path/to/profiles",
         "crawl_size": 1000,
-        "part": 200
+        "part": 200,
+        "mode": "Normal"
     }
 
     _config_file = "config.json"
@@ -63,13 +64,22 @@ class WebConfig:
         self._config["part"] = value
         self.save_config()
 
+    @property
+    def mode(self):
+        return self._config.get("mode", self._default_config["mode"])
+
+    @mode.setter
+    def mode(self, value):
+        self._config["mode"] = value
+        self.save_config()
 
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
 
+    parse.add_argument('--mode', choices=['Normal', 'Full', 'Specific'])
     parse.add_argument('--crawl_size', type=int, default=1000)
-    parse.add_argument('--part', type=str, default=200)
-    parse.add_argument('--browser')
+    parse.add_argument('--part', type=int, default=200)
+    parse.add_argument('--browser',choices=['Firefox', 'Edge'])
     parse.add_argument('--profiles_path')
 
     args = vars(parse.parse_args())
