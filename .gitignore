@@ -1,6 +1,6 @@
 **/__pycache__
 *.html
-config.json
+*.json
 *.log
 Profiles/*
 temp/*
