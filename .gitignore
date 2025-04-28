@@ -2,7 +2,7 @@
 *.html
 *.json
 *.log
-Profiles/*
-temp/*
-download/*
-data/download/*
+**/Profiles
+**/temp
+**/data
+**/download
