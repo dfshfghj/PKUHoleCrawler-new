@@ -34,6 +34,12 @@ class App:
                 token = input("手机令牌：")
                 self.client.login_by_token(token)
             response = self.client.un_read()
+        self.client.save_cookies()
+
+    def browse(self, page=1, limit=25):
+        response = self.client.search(page=page, limit=limit)
+        posts = response.json()["data"]["data"]
+        return posts
 
     def read(self, post_id):
         post = self.client.get_post(post_id)
@@ -67,17 +73,22 @@ class App:
                 comments = []
             return post, comments
         else:
-            return {'pid': post_id, 'text': '您查看的树洞不存在', 'type': 'text'}, []
+            return {'pid': int(post_id), 'text': '您查看的树洞不存在', 'type': 'text'}, []
 
     def get_posts(self, posts):
         posts_data = []
+        post_ids = []
         futures = [self.executor.submit(lambda post_id=post_id: self.get_post(post_id)) for post_id in posts]
         for future in futures:
             post, comments = future.result()
             posts_data.append({"post": post, "comments": comments})
-        data_name = os.path.join(self.current_dir, 'data', datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')) + ".json"
-        with open(data_name, 'w') as file:
-            json.dump(posts_data, file, indent=4)
+            post_ids.append(post["pid"])
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        data_name = f'{max(post_ids)}-{min(post_ids)}.json'
+        with open(os.path.join(current_dir, 'data', data_name), 'w', encoding='utf-8') as file:
+            json.dump(posts_data, file, indent=4, ensure_ascii=False)
+
+
 
 if __name__ == "__main__":
     app = App()

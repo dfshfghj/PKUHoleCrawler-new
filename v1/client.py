@@ -2,6 +2,7 @@ import requests
 import enum
 import random
 import re
+import os
 import json
 import uuid
 from http.cookiejar import Cookie
@@ -11,9 +12,16 @@ class TreeHoleWeb(enum.Enum):
     REDIR_URL = "https://treehole.pku.edu.cn/cas_iaaa_login?uuid=fc71db5799cf&plat=web"
     SSO_LOGIN = "http://treehole.pku.edu.cn/cas_iaaa_login"
     UN_READ = "https://treehole.pku.edu.cn/api/mail/un_read"
+    SEARCH = "https://treehole.pku.edu.cn/api/pku_hole"
+    COMMENT = "https://treehole.pku.edu.cn/api/pku_comment_v3"
+    FOLLOW = "https://treehole.pku.edu.cn/api/pku_attention"
+    GET_FOLLOW = "https://treehole.pku.edu.cn/api/follow_v2"
+    REPORT = "https://treehole.pku.edu.cn/api/pku_comment/report"
     LOGIN_BY_TOKEN = "https://treehole.pku.edu.cn/api/login_iaaa_check_token"
     LOGIN_BY_MESSAGE = "https://treehole.pku.edu.cn/api/jwt_msg_verify"
     SEND_MESSAGE = "https://treehole.pku.edu.cn/api/jwt_send_msg"
+    COURSE_TABLE = "https://treehole.pku.edu.cn/api/getCoursetable_v2"
+    GRADE = "https://treehole.pku.edu.cn/api/course/score_v2"
 
 
 class Client:
@@ -62,7 +70,7 @@ class Client:
         return response
     
     def login_by_token(self, token):
-        response = self.session.post(TreeHoleWeb.LOGIN_BY_TOKEN.value, data={'token': token})
+        response = self.session.post(TreeHoleWeb.LOGIN_BY_TOKEN.value, data={'code': token})
         response.raise_for_status()
         print(response.status_code, response.json())
         return response
@@ -99,6 +107,61 @@ class Client:
                 for chunk in response.iter_content(1024):
                     file.write(chunk)
 
+    def search(self, keyword=None, page=1, limit=25, label=None):
+        response = self.session.get(TreeHoleWeb.SEARCH.value, params={
+            "page": page,
+            "limit": limit,
+            "keyword": keyword,
+            "label": label
+        })
+        return response
+    
+    def follow(self, post_id):
+        response = self.session.post(TreeHoleWeb.FOLLOW.value + f"/{post_id}")
+        return response
+    
+    def get_follow(self, page=1, limit=25):
+        response = self.session.get(TreeHoleWeb.GET_FOLLOW.value, params={
+            "page": page,
+            "limit": limit
+        })
+        return response
+    
+    def comment(self, post_id, text, comment_id=None):
+        response = self.session.post(TreeHoleWeb.COMMENT.value, data={
+            "comment_id": comment_id,
+            "pid": post_id,
+            "text": text
+        } if comment_id else {
+            "pid": post_id,
+            "text": text
+        })
+        return response
+    
+    def report(self, tp, xid, other, reason):
+        if tp == 'post':
+            post_id = xid
+            response = self.session.post(TreeHoleWeb.REPORT.value + f"/{post_id}", data={
+                "other": other,
+                "reason": reason
+            })
+        elif tp == 'comment':
+            comment_id = xid
+            response = self.session.post(TreeHoleWeb.REPORT.value, data={
+                "cid": comment_id,
+                "other": other,
+                "reason": reason
+            })
+        return response
+    
+    def get_course_table(self):
+        response = self.session.get(TreeHoleWeb.COURSE_TABLE.value)
+        return response
+    
+    def get_grade(self):
+        response = self.session.get(TreeHoleWeb.GRADE.value)
+        return response
+    
     def save_cookies(self):
         cookies_list = []
         for cookie in self.session.cookies:
@@ -113,12 +176,16 @@ class Client:
                 }
                 cookies_list.append(cookie_dict)
 
-        with open("cookies.json", 'w') as f:
+        current_path = os.path.abspath(__file__)
+        cookie_path = os.path.join(os.path.dirname(current_path), "cookies.json")
+        with open(cookie_path, 'w') as f:
             json.dump(cookies_list, f, indent=4)
 
     def load_cookies(self):
+        current_path = os.path.abspath(__file__)
+        cookie_path = os.path.join(os.path.dirname(current_path), "cookies.json")
         try:
-            with open("cookies.json", 'r') as f:
+            with open(cookie_path, 'r') as f:
                 cookies_list = json.load(f)
             self.session.cookies.clear()
             for cookie_dict in cookies_list:
@@ -144,42 +211,3 @@ class Client:
 
         except Exception as e:
             print(e)
-    
-
-
-
-"""
-if __name__ == "__main__":
-    import getpass
-    client = Client()
-    response = client.un_read()
-    if response.status_code != 200:
-        print(f"{response.status_code}: 需要登录")
-        
-        username = input('username: ')
-        password = getpass.getpass('password: ')
-        data = client.oauth_login(username, password)
-        token = data["token"]
-        print(token)
-        client.sso_login(token)
-        response = client.un_read()
-        
-    else:
-        if response.json()["message"] == "请手机短信验证":
-            tmp = input("发送验证码(Y/n)：")
-            if tmp == 'Y':
-                client.send_message()
-                code = input("短信验证码：")
-                client.login_by_message(code)
-        elif response.json()["message"] == "请进行令牌验证":
-            token = input("手机令牌：")
-            client.login_by_token(token)
-
-    while True:
-        key = input("key (q to quit): ")
-        if key == 'q':
-            client.save_cookies()
-            break
-        else:
-            print(client.get_post(key))
-"""
