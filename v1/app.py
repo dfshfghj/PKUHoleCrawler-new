@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 import datetime
 import json
+import pyotp
 
 class App:
     def __init__(self):
@@ -13,12 +14,22 @@ class App:
         if not os.path.exists(os.path.join(self.current_dir, 'data', 'download')):
             os.makedirs(os.path.join(self.current_dir, 'data', 'download'))
 
+        with open("config.json", encoding="utf-8") as file:
+            data = json.load(file)
+        
+        self.username = data["username"] if "username" in data else None
+        self.password = data["password"] if "password" in data else None
+        self.secret_key = data["secret_key"] if "secret_key" in data else None
+
         response = self.client.un_read()
         while response.status_code != 200:
             print(f"{response.status_code}: 需要登录")
-            
-            username = input('username: ')
-            password = getpass.getpass('password: ')
+            if self.username and self.password:
+                username = self.username
+                password = self.password
+            else:
+                username = input('username: ')
+                password = getpass.getpass('password: ')
             token = self.client.oauth_login(username, password)["token"]
             self.client.sso_login(token)
             response = self.client.un_read()
@@ -31,7 +42,12 @@ class App:
                     code = input("短信验证码：")
                     self.client.login_by_message(code)
             elif response.json()["message"] == "请进行令牌验证":
-                token = input("手机令牌：")
+                if self.secret_key:
+                    totp = pyotp.TOTP(self.secret_key)
+                    token = totp.now()
+                    print(f"自动生成OTP令牌：{token}")
+                else:
+                    token = input("手机令牌：")
                 self.client.login_by_token(token)
             response = self.client.un_read()
         self.client.save_cookies()
