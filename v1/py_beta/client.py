@@ -22,6 +22,9 @@ class TreeHoleWeb(enum.Enum):
     SEND_MESSAGE = "https://treehole.pku.edu.cn/api/jwt_send_msg"
     COURSE_TABLE = "https://treehole.pku.edu.cn/api/getCoursetable_v2"
     GRADE = "https://treehole.pku.edu.cn/api/course/score_v2"
+    # 新增API端点
+    NEW_POSTS_LIST = "https://treehole.pku.edu.cn/chapi/api/v3/hole/list_comments"
+    NEW_COMMENTS_LIST = "https://treehole.pku.edu.cn/chapi/api/v3/comment/list"
 
 
 class Client:
@@ -57,7 +60,7 @@ class Client:
             'token': token
             })
         response.raise_for_status()
-        print(response.status_code, response.headers)
+        # print(response.status_code, response.headers)
 
         self.authorization = re.search(r'token=(.*)', response.url).group(1)
         self.session.cookies.update({"pku_token": self.authorization})
@@ -72,13 +75,13 @@ class Client:
     def login_by_token(self, token):
         response = self.session.post(TreeHoleWeb.LOGIN_BY_TOKEN.value, data={'code': token})
         response.raise_for_status()
-        print(response.status_code, response.json())
+        # print(response.status_code, response.json())
         return response
     
     def login_by_message(self, code):
         response = self.session.post(TreeHoleWeb.LOGIN_BY_MESSAGE.value, data={'valid_code': code})
         response.raise_for_status()
-        print(response.status_code, response.json())
+        # print(response.status_code, response.json())
         return response
     
     def send_message(self):
@@ -160,6 +163,29 @@ class Client:
     
     def get_grade(self):
         response = self.session.get(TreeHoleWeb.GRADE.value)
+        return response
+    
+    # 新增方法：获取帖子列表（新API）
+    def get_posts_list(self, page=1, limit=100, comment_limit=10, comment_stream=1):
+        response = self.session.get(TreeHoleWeb.NEW_POSTS_LIST.value, params={
+            "page": page,
+            "limit": limit,
+            "comment_limit": comment_limit,
+            "comment_stream": comment_stream
+        })
+        response.raise_for_status()
+        return response
+
+    # 新增方法：获取评论列表（新API）
+    def get_comments_by_pid(self, pid, page=1, limit=10, sort=0, comment_stream=1):
+        response = self.session.get(TreeHoleWeb.NEW_COMMENTS_LIST.value, params={
+            "pid": pid,
+            "page": page,
+            "limit": limit,
+            "sort": sort,
+            "comment_stream": comment_stream
+        })
+        response.raise_for_status()
         return response
     
     def save_cookies(self):
