@@ -18,8 +18,8 @@ func (m Model) View() string {
 		h = 24
 	}
 
-	// Tab bar - full width
-	tabs := []string{"首页", "帖子", "配置", "日志"}
+	// Tab bar - fixed top
+	tabs := []string{"首页", "帖子"}
 	var tabItems []string
 	for i, t := range tabs {
 		if i == m.TabCursor {
@@ -30,11 +30,9 @@ func (m Model) View() string {
 	}
 	tabBar := tabBarStyle.Width(w).Render(lipgloss.JoinHorizontal(lipgloss.Left, tabItems...))
 
-	// Content - full width with padding from contentStyle
-	content := contentStyle.Width(w).Render(m.renderContent())
-
-	// Footer - full width, text right-aligned
-	footerText := fmt.Sprintf("Tab: 切换页面 | q: 退出 | %s", time.Now().Format("15:04:05"))
+	// Footer - fixed bottom
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	footerText := fmt.Sprintf("PKUHole Crawler v1.0 | h: 帮助 | %s", time.Now().In(loc).Format("15:04:05"))
 	footerWidth := lipgloss.Width(footerText)
 	leftPad := w - footerWidth
 	if leftPad < 0 {
@@ -42,7 +40,26 @@ func (m Model) View() string {
 	}
 	footer := strings.Repeat(" ", leftPad) + footerText
 
-	body := tabBar + "\n" + content + "\n" + footer
+	// Content area - fixed height between tab bar and footer
+	contentHeight := h - 3 // tab bar(1) + separator(1) + footer(1)
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	content := m.renderContent()
+	contentBlock := lipgloss.NewStyle().
+		Height(contentHeight).
+		Width(w).
+		Background(colorBlack).
+		Render(content)
+
+	body := tabBar + "\n" + contentBlock + "\n" + footer
+
+	// Dialog overlay
+	if m.Dialog != DialogNone {
+		dialog := m.renderDialog()
+		body = lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog,
+			lipgloss.WithWhitespaceBackground(colorBlack))
+	}
 
 	return baseStyle.Width(w).Height(h).Render(body)
 }
@@ -53,12 +70,21 @@ func (m Model) renderContent() string {
 		return m.renderHome()
 	case PagePosts:
 		return m.renderPosts()
-	case PageConfig:
-		return m.renderConfig()
-	case PageLogs:
-		return m.renderLogs()
 	default:
 		return "Unknown page"
+	}
+}
+
+func (m Model) renderDialog() string {
+	switch m.Dialog {
+	case DialogConfig:
+		return m.renderConfigDialog()
+	case DialogLogs:
+		return m.renderLogsDialog()
+	case DialogHelp:
+		return m.renderHelpDialog()
+	default:
+		return ""
 	}
 }
 
@@ -126,6 +152,24 @@ func (m Model) renderHome() string {
 		),
 	))
 
+	// Crawl mode selection
+	modeLabel := "顺序爬取"
+	if m.CrawlMode == CrawlMonitor {
+		modeLabel = fmt.Sprintf("监控模式(前%d页)", m.MonitorPages)
+	}
+	modeStyle := vStatLabelStyle
+	if m.HomeButtonIdx == 2 {
+		modeStyle = modeStyle.Foreground(colorPink)
+	}
+	b.WriteString("\n")
+	b.WriteString(vStatusCard.Render(
+		lipgloss.JoinHorizontal(lipgloss.Top,
+			modeStyle.Render("爬取模式: "),
+			vStatValueStyle.Render(modeLabel),
+			vStatLabelStyle.Render("  m: 切换"),
+		),
+	))
+
 	b.WriteString("\n")
 	buttons := []string{"启动爬虫", "停止爬虫"}
 	var btns []string
@@ -166,7 +210,7 @@ func (m Model) renderPosts() string {
 	} else {
 		b.WriteString(vTitleStyle.Render("帖子列表"))
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	searchLabel := "按 / 搜索"
 	if m.Searching {
@@ -178,49 +222,78 @@ func (m Model) renderPosts() string {
 	b.WriteString("\n")
 
 	if m.PostListLoading {
-		b.WriteString("\n")
 		b.WriteString(vLoadingStyle.Render("加载中..."))
 		return b.String()
 	}
 
 	if m.PostListError != "" {
-		b.WriteString("\n")
 		b.WriteString(vErrorStyle.Render("错误: " + m.PostListError))
+		b.WriteString("\n")
 	}
 
 	if len(m.PostList) == 0 {
-		b.WriteString("\n")
 		b.WriteString(vEmptyStyle.Render("暂无数据"))
 	} else {
-		for i, post := range m.PostList {
-			style := vListItemStyle
-			if i == m.PostListCursor {
-				style = vListItemSelectedStyle
-			}
-
-			text := post.Text
-			if len(text) > 80 {
-				text = text[:80] + "..."
-			}
-
-			ts := time.Unix(int64(post.Timestamp), 0).Format("2006-01-02 15:04")
-
-			line := fmt.Sprintf("#%-6d %-10s %s", post.Pid, ts, text)
-			if post.Anonymous == 0 {
-				line = fmt.Sprintf("#%-6d %-10s [实名] %s", post.Pid, ts, text)
-			}
-
-			b.WriteString(style.Render(line))
-			b.WriteString("\n")
+		contentWidth := m.Width - 8
+		if contentWidth < 20 {
+			contentWidth = 20
 		}
-	}
 
-	if m.PostListTotal > 0 {
-		totalPages := (m.PostListTotal + m.PostListPerPage - 1) / m.PostListPerPage
+		selStyle := lipgloss.NewStyle().
+			Foreground(colorPink).
+			Bold(true).
+			Padding(0, 0, 0, 1).
+			Background(colorBlack).
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(colorPink).
+			Render
+
+		var content strings.Builder
+		for i, post := range m.PostList {
+			if i > 0 {
+				content.WriteString("\n")
+			}
+
+			loc, _ := time.LoadLocation("Asia/Shanghai")
+			ts := time.Unix(int64(post.Timestamp), 0).In(loc).Format("2006-01-02 15:04")
+			replyStr := vPostReplyStyle.Render(fmt.Sprintf("回复:%d", post.Reply))
+			likeStr := vPostLikeStyle.Render(fmt.Sprintf("赞:%d", post.Likenum))
+			meta := replyStr + " " + likeStr
+			pidStr := vPostPidStyle.Render(fmt.Sprintf("#%-6d", post.Pid))
+			tsStr := vPostTimeStyle.Render(ts)
+			header := pidStr + " " + tsStr + "  " + meta
+			if !post.Anonymous {
+				header = pidStr + " [实名] " + tsStr + "  " + meta
+			}
+
+			if i == m.SelectedPostIdx {
+				content.WriteString(selStyle(header) + "\n")
+				text := strings.ReplaceAll(post.Text, "\r\n", "\n")
+				for _, line := range strings.Split(text, "\n") {
+					content.WriteString(selStyle("  "+line) + "\n")
+				}
+			} else {
+				content.WriteString(header + "\n")
+				text := strings.ReplaceAll(post.Text, "\r\n", "\n")
+				for _, line := range strings.Split(text, "\n") {
+					content.WriteString("  " + line + "\n")
+				}
+			}
+		}
+
+		newContent := content.String()
+		if m.postContent != newContent || m.PostViewport.Width != contentWidth || m.PostViewport.Height != m.calcPostViewportHeight() {
+			m.PostViewport.Width = contentWidth
+			m.PostViewport.Height = m.calcPostViewportHeight()
+			m.PostViewport.SetContent(newContent)
+			m.postContent = newContent
+		}
+		b.WriteString(m.PostViewport.View())
+
 		b.WriteString("\n")
 		b.WriteString(vPaginationStyle.Render(
-			fmt.Sprintf("第 %d/%d 页 (共 %d 条) | ←→翻页 | ↑↓选择 | Enter查看 | /搜索",
-				m.PostListPage, totalPages, m.PostListTotal),
+			fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d/%d",
+				len(m.PostList), m.PostListTotal),
 		))
 	}
 
@@ -233,15 +306,15 @@ func (m Model) renderPostDetail() string {
 	if m.CurrentPost == nil {
 		return "无帖子数据"
 	}
-
-	ts := time.Unix(int64(m.CurrentPost.Timestamp), 0).Format("2006-01-02 15:04")
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	ts := time.Unix(int64(m.CurrentPost.Timestamp), 0).In(loc).Format("2006-01-02 15:04")
 	b.WriteString(vPostPidStyle.Render(fmt.Sprintf("#%d", m.CurrentPost.Pid)))
 	b.WriteString("  ")
-	b.WriteString(vPostMetaStyle.Render(ts))
-	b.WriteString(fmt.Sprintf("  回复: %d  点赞: %d", m.CurrentPost.Reply, m.CurrentPost.Likenum))
-	if m.CurrentPost.Tag != "" {
-		b.WriteString("  标签: " + m.CurrentPost.Tag)
-	}
+	b.WriteString(vPostTimeStyle.Render(ts))
+	b.WriteString("  ")
+	b.WriteString(vPostReplyStyle.Render(fmt.Sprintf("回复: %d", m.CurrentPost.Reply)))
+	b.WriteString("  ")
+	b.WriteString(vPostLikeStyle.Render(fmt.Sprintf("点赞: %d", m.CurrentPost.Likenum)))
 	b.WriteString("\n\n")
 
 	b.WriteString(vPostTextStyle.Render(m.CurrentPost.Text))
@@ -256,35 +329,59 @@ func (m Model) renderPostDetail() string {
 	if len(m.CommentList) == 0 {
 		b.WriteString(vEmptyStyle.Render("暂无评论"))
 	} else {
+		var content strings.Builder
 		for i, c := range m.CommentList {
-			style := vListItemStyle
-			if i == m.CommentCursor {
-				style = vListItemSelectedStyle
+			if i > 0 {
+				content.WriteString("\n")
 			}
 
-			cName := c.Name
+			cName := c.NameTag
 			if cName == "" {
 				cName = "匿名"
 			}
-			cTs := time.Unix(int64(c.Timestamp), 0).Format("15:04")
+			loc, _ := time.LoadLocation("Asia/Shanghai")
+			cTs := time.Unix(int64(c.Timestamp), 0).In(loc).Format("15:04")
 			cText := c.Text
-			if len(cText) > 100 {
-				cText = cText[:100] + "..."
-			}
 
-			line := fmt.Sprintf("%s %s: %s", cTs, cName, cText)
-			b.WriteString(style.Render(line))
-			b.WriteString("\n")
+			content.WriteString(fmt.Sprintf("%s %s:\n  %s", cTs, cName, cText))
 		}
+
+		contentWidth := m.Width - 8
+		if contentWidth < 20 {
+			contentWidth = 20
+		}
+		newContent := content.String()
+		vpHeight := m.calcPostViewportHeight() - 6
+		if m.commentContent != newContent || m.CommentViewport.Width != contentWidth || m.CommentViewport.Height != vpHeight {
+			m.CommentViewport.Width = contentWidth
+			m.CommentViewport.Height = vpHeight
+			m.CommentViewport.SetContent(newContent)
+			m.commentContent = newContent
+		}
+		b.WriteString(m.CommentViewport.View())
 	}
+
+	b.WriteString("\n")
+	b.WriteString(vPaginationStyle.Render("Esc: 返回列表 | ↑↓: 滚动评论"))
 
 	return b.String()
 }
 
-func (m Model) renderConfig() string {
+func (m Model) calcPostViewportHeight() int {
+	headerLines := 3
+	paddingLines := 2
+	paginationLines := 1
+	avail := m.Height - 3 - headerLines - paddingLines - paginationLines
+	if avail < 3 {
+		avail = 3
+	}
+	return avail
+}
+
+func (m Model) renderConfigDialog() string {
 	var b strings.Builder
 
-	b.WriteString(vTitleStyle.Render("配置管理"))
+	b.WriteString(vDialogTitleStyle.Render("配置管理"))
 	b.WriteString("\n\n")
 
 	b.WriteString(vSubtitleStyle.Render("config.json"))
@@ -304,7 +401,7 @@ func (m Model) renderConfig() string {
 		inputStyle := vFormInput
 
 		if m.ConfigFieldIdx == i {
-			labelStyle = labelStyle.Foreground(lipgloss.Color("#FF69B4"))
+			labelStyle = labelStyle.Foreground(colorPink)
 			inputStyle = vFormInputFocused
 		}
 
@@ -339,51 +436,93 @@ func (m Model) renderConfig() string {
 		b.WriteString(vErrorStyle.Render("错误: " + m.LastError))
 	}
 
-	return b.String()
+	b.WriteString("\n\n")
+	b.WriteString(vDialogHelpStyle.Render("↑↓: 选择 | Enter: 编辑/保存 | Esc: 关闭"))
+
+	return dialogCard.Render(b.String())
 }
 
-func (m Model) renderLogs() string {
+func (m Model) renderLogsDialog() string {
 	var b strings.Builder
 
-	b.WriteString(vTitleStyle.Render("运行日志"))
+	b.WriteString(vDialogTitleStyle.Render("运行日志"))
 	b.WriteString("\n\n")
 
 	if m.LogLoading {
 		b.WriteString(vLoadingStyle.Render("加载日志中..."))
-		return b.String()
-	}
-
-	if m.LastError != "" {
-		b.WriteString(vErrorStyle.Render("错误: " + m.LastError))
-		b.WriteString("\n")
-	}
-
-	if len(m.LogLines) == 0 {
+	} else if len(m.LogLines) == 0 {
 		b.WriteString(vEmptyStyle.Render("暂无日志"))
 	} else {
-		end := m.LogOffset + 20
+		end := m.LogOffset + 15
 		if end > len(m.LogLines) {
 			end = len(m.LogLines)
 		}
 
 		for i := m.LogOffset; i < end; i++ {
 			line := m.LogLines[i]
-			if len(line) > m.Width-6 {
-				line = line[:m.Width-6]
+			if len(line) > 70 {
+				line = line[:70]
 			}
 			b.WriteString(vLogLineStyle.Render(line))
 			b.WriteString("\n")
 		}
+
+		b.WriteString("\n")
+		totalLines := len(m.LogLines)
+		b.WriteString(vPaginationStyle.Render(
+			fmt.Sprintf("日志: %d 行 | 当前: %d-%d | ↑↓/PgUp/PgDn滚动 | r: 刷新",
+				totalLines, m.LogOffset+1, minInt(m.LogOffset+15, totalLines)),
+		))
 	}
 
 	b.WriteString("\n")
-	totalLines := len(m.LogLines)
-	b.WriteString(vPaginationStyle.Render(
-		fmt.Sprintf("日志: %d 行 | 当前: %d-%d | ↑↓/PgUp/PgDn滚动 | r: 刷新",
-			totalLines, m.LogOffset+1, minInt(m.LogOffset+20, totalLines)),
-	))
+	b.WriteString(vDialogHelpStyle.Render("Esc: 关闭"))
 
-	return b.String()
+	return dialogCard.Render(b.String())
+}
+
+func (m Model) renderHelpDialog() string {
+	var b strings.Builder
+
+	b.WriteString(vDialogTitleStyle.Render("快捷键帮助"))
+	b.WriteString("\n\n")
+
+	helpItems := []struct {
+		key  string
+		desc string
+	}{
+		{"h", "打开/关闭此帮助菜单"},
+		{"c", "打开配置管理对话框"},
+		{"l", "打开运行日志查看器"},
+		{"Tab", "在首页和帖子列表之间切换"},
+		{"q", "退出程序"},
+		{"", ""},
+		{"m", "切换爬取模式（顺序/监控）"},
+		{"←→", "选择启动/停止爬虫按钮"},
+		{"Enter", "执行选中的操作"},
+		{"", ""},
+		{"/", "搜索帖子"},
+		{"r", "刷新帖子列表"},
+		{"↑↓", "选择帖子 / 滚动评论"},
+		{"PgUp/PgDn", "快速滚动"},
+	}
+
+	for _, item := range helpItems {
+		if item.key == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
+			vStatValueStyle.Width(12).Render(item.key),
+			vStatLabelStyle.Render(item.desc),
+		))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(vDialogHelpStyle.Render("Esc: 关闭"))
+
+	return dialogCard.Render(b.String())
 }
 
 func maskField(s string, mask bool) string {

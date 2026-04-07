@@ -17,44 +17,42 @@ import (
 	"time"
 )
 
-// TreeHoleWeb 定义所有API端点
 type TreeHoleWeb string
 
 const (
-	OAUTH_LOGIN      TreeHoleWeb = "https://iaaa.pku.edu.cn/iaaa/oauthlogin.do"
-	REDIR_URL        TreeHoleWeb = "https://treehole.pku.edu.cn/cas_iaaa_login?uuid=fc71db5799cf&plat=web"
-	SSO_LOGIN        TreeHoleWeb = "http://treehole.pku.edu.cn/cas_iaaa_login"
-	UN_READ          TreeHoleWeb = "https://treehole.pku.edu.cn/api/mail/un_read"
-	SEARCH           TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_hole"
-	COMMENT          TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_comment_v3"
-	FOLLOW           TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_attention"
-	GET_FOLLOW       TreeHoleWeb = "https://treehole.pku.edu.cn/api/follow_v2"
-	REPORT           TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_comment/report"
-	LOGIN_BY_TOKEN   TreeHoleWeb = "https://treehole.pku.edu.cn/api/login_iaaa_check_token"
-	LOGIN_BY_MESSAGE TreeHoleWeb = "https://treehole.pku.edu.cn/api/jwt_msg_verify"
-	SEND_MESSAGE     TreeHoleWeb = "https://treehole.pku.edu.cn/api/jwt_send_msg"
-	COURSE_TABLE     TreeHoleWeb = "https://treehole.pku.edu.cn/api/getCoursetable_v2"
-	GRADE            TreeHoleWeb = "https://treehole.pku.edu.cn/api/course/score_v2"
-	// 新增API端点
+	OAUTH_LOGIN       TreeHoleWeb = "https://iaaa.pku.edu.cn/iaaa/oauthlogin.do"
+	REDIR_URL         TreeHoleWeb = "https://treehole.pku.edu.cn/cas_iaaa_login?uuid=fc71db5799cf&plat=web"
+	SSO_LOGIN         TreeHoleWeb = "http://treehole.pku.edu.cn/cas_iaaa_login"
+	UN_READ           TreeHoleWeb = "https://treehole.pku.edu.cn/api/mail/un_read"
+	SEARCH            TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_hole"
+	COMMENT           TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_comment_v3"
+	FOLLOW            TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_attention"
+	GET_FOLLOW        TreeHoleWeb = "https://treehole.pku.edu.cn/api/follow_v2"
+	REPORT            TreeHoleWeb = "https://treehole.pku.edu.cn/api/pku_comment/report"
+	LOGIN_BY_TOKEN    TreeHoleWeb = "https://treehole.pku.edu.cn/api/login_iaaa_check_token"
+	LOGIN_BY_MESSAGE  TreeHoleWeb = "https://treehole.pku.edu.cn/api/jwt_msg_verify"
+	SEND_MESSAGE      TreeHoleWeb = "https://treehole.pku.edu.cn/api/jwt_send_msg"
+	COURSE_TABLE      TreeHoleWeb = "https://treehole.pku.edu.cn/api/getCoursetable_v2"
+	GRADE             TreeHoleWeb = "https://treehole.pku.edu.cn/api/course/score_v2"
 	NEW_POSTS_LIST    TreeHoleWeb = "https://treehole.pku.edu.cn/chapi/api/v3/hole/list_comments"
 	NEW_COMMENTS_LIST TreeHoleWeb = "https://treehole.pku.edu.cn/chapi/api/v3/comment/list"
 )
 
-// Client 结构体表示HTTP客户端
 type Client struct {
 	httpClient    *http.Client
 	authorization string
+	deviceUUID    string
 }
 
-// NewClient 创建新的客户端实例
-func NewClient() (*Client, error) {
-	// 创建cookie jar
+func NewClient(deviceUUID string) (*Client, error) {
+	if deviceUUID == "" {
+		deviceUUID = "Web_PKUHOLE_2.0.0_WEB_UUID_00000000-0000-0000-0000-000000000000"
+	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return nil, err
 	}
 
-	// 创建HTTP客户端
 	client := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
@@ -65,22 +63,20 @@ func NewClient() (*Client, error) {
 
 	c := &Client{
 		httpClient: client,
+		deviceUUID: deviceUUID,
 	}
 
-	// 设置User-Agent
 	c.httpClient.Transport = &userAgentRoundTripper{
 		transport: c.httpClient.Transport,
 		userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0",
 	}
 
-	// 加载cookies
-	err = c.loadCookies()
+	err = c.LoadCookies()
 	if err != nil {
 		log.Printf("加载cookies失败: %v\n", err)
 	}
 
-	// 检查是否已有pku_token
-	if token := c.getPkuToken(); token != "" {
+	if token := c.GetPkuToken(); token != "" {
 		c.authorization = token
 	}
 
@@ -101,8 +97,7 @@ func (u *userAgentRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 	return u.transport.RoundTrip(req)
 }
 
-// getPkuToken 从cookies中获取pku_token
-func (c *Client) getPkuToken() string {
+func (c *Client) GetPkuToken() string {
 	cookies := c.httpClient.Jar.Cookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"})
 	for _, cookie := range cookies {
 		if cookie.Name == "pku_token" {
@@ -112,8 +107,17 @@ func (c *Client) getPkuToken() string {
 	return ""
 }
 
-// oauthLogin 执行OAuth登录
-func (c *Client) oauthLogin(username, password string) (map[string]interface{}, error) {
+func (c *Client) SetPkuToken(token string) {
+	cookie := &http.Cookie{
+		Name:   "pku_token",
+		Value:  token,
+		Domain: "treehole.pku.edu.cn",
+		Path:   "/",
+	}
+	c.httpClient.Jar.SetCookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"}, []*http.Cookie{cookie})
+}
+
+func (c *Client) OAuthLogin(username, password string) (map[string]interface{}, error) {
 	data := url.Values{}
 	data.Set("appid", "PKU Helper")
 	data.Set("userName", username)
@@ -142,8 +146,7 @@ func (c *Client) oauthLogin(username, password string) (map[string]interface{}, 
 	return result, nil
 }
 
-// ssoLogin 执行SSO登录
-func (c *Client) ssoLogin(token string) error {
+func (c *Client) SSOLogin(token string) error {
 	params := url.Values{}
 	params.Set("uuid", generateUUID())
 	params.Set("plat", "web")
@@ -161,7 +164,6 @@ func (c *Client) ssoLogin(token string) error {
 		return fmt.Errorf("sso login failed with status: %d", resp.StatusCode)
 	}
 
-	// 从重定向URL中提取token
 	re := regexp.MustCompile(`token=(.*)`)
 	matches := re.FindStringSubmatch(resp.Request.URL.String())
 	if len(matches) < 2 {
@@ -169,24 +171,12 @@ func (c *Client) ssoLogin(token string) error {
 	}
 
 	c.authorization = matches[1]
-	c.setPkuToken(c.authorization)
+	c.SetPkuToken(c.authorization)
 
 	return nil
 }
 
-// setPkuToken 设置pku_token cookie
-func (c *Client) setPkuToken(token string) {
-	cookie := &http.Cookie{
-		Name:   "pku_token",
-		Value:  token,
-		Domain: "treehole.pku.edu.cn",
-		Path:   "/",
-	}
-	c.httpClient.Jar.SetCookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"}, []*http.Cookie{cookie})
-}
-
-// unRead 获取未读消息
-func (c *Client) unRead() (*http.Response, error) {
+func (c *Client) UnRead() (*http.Response, error) {
 	req, err := http.NewRequest("GET", string(UN_READ), nil)
 	if err != nil {
 		return nil, err
@@ -199,8 +189,7 @@ func (c *Client) unRead() (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// loginByToken 使用token登录
-func (c *Client) loginByToken(token string) (*http.Response, error) {
+func (c *Client) LoginByToken(token string) (*http.Response, error) {
 	data := url.Values{}
 	data.Set("code", token)
 
@@ -213,8 +202,7 @@ func (c *Client) loginByToken(token string) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// loginByMessage 使用短信验证码登录
-func (c *Client) loginByMessage(code string) (*http.Response, error) {
+func (c *Client) LoginByMessage(code string) (*http.Response, error) {
 	data := url.Values{}
 	data.Set("valid_code", code)
 
@@ -227,8 +215,7 @@ func (c *Client) loginByMessage(code string) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// sendMessage 发送短信验证码
-func (c *Client) sendMessage() (*http.Response, error) {
+func (c *Client) SendMessage() (*http.Response, error) {
 	req, err := http.NewRequest("POST", string(SEND_MESSAGE), nil)
 	if err != nil {
 		return nil, err
@@ -237,10 +224,9 @@ func (c *Client) sendMessage() (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// getPost 获取单个帖子
-func (c *Client) getPost(postID int) (map[string]interface{}, error) {
-	url := fmt.Sprintf("https://treehole.pku.edu.cn/api/pku/%d", postID)
-	req, err := http.NewRequest("GET", url, nil)
+func (c *Client) GetPost(postID int) (map[string]interface{}, error) {
+	reqURL := fmt.Sprintf("https://treehole.pku.edu.cn/api/pku/%d", postID)
+	req, err := http.NewRequest("GET", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -268,8 +254,7 @@ func (c *Client) getPost(postID int) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// getComment 获取帖子评论
-func (c *Client) getComment(postID, page, limit int, sort string) (map[string]interface{}, error) {
+func (c *Client) GetComment(postID, page, limit int, sort string) (map[string]interface{}, error) {
 	postURL := fmt.Sprintf("https://treehole.pku.edu.cn/api/pku_comment_v3/%d", postID)
 	params := url.Values{}
 	params.Set("page", strconv.Itoa(page))
@@ -305,8 +290,7 @@ func (c *Client) getComment(postID, page, limit int, sort string) (map[string]in
 	return result, nil
 }
 
-// search 搜索帖子
-func (c *Client) search(keyword string, page, limit int, label interface{}) (*http.Response, error) {
+func (c *Client) Search(keyword string, page, limit int, label interface{}) (*http.Response, error) {
 	params := url.Values{}
 	params.Set("page", strconv.Itoa(page))
 	params.Set("limit", strconv.Itoa(limit))
@@ -330,10 +314,9 @@ func (c *Client) search(keyword string, page, limit int, label interface{}) (*ht
 	return c.httpClient.Do(req)
 }
 
-// follow 关注帖子
-func (c *Client) follow(postID int) (*http.Response, error) {
-	url := fmt.Sprintf("%s/%d", FOLLOW, postID)
-	req, err := http.NewRequest("POST", url, nil)
+func (c *Client) Follow(postID int) (*http.Response, error) {
+	reqURL := fmt.Sprintf("%s/%d", FOLLOW, postID)
+	req, err := http.NewRequest("POST", reqURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -345,8 +328,7 @@ func (c *Client) follow(postID int) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// getFollow 获取关注的帖子
-func (c *Client) getFollow(page, limit int) (*http.Response, error) {
+func (c *Client) GetFollow(page, limit int) (*http.Response, error) {
 	params := url.Values{}
 	params.Set("page", strconv.Itoa(page))
 	params.Set("limit", strconv.Itoa(limit))
@@ -364,8 +346,7 @@ func (c *Client) getFollow(page, limit int) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// comment 发表评论
-func (c *Client) comment(postID int, text string, commentID *int) (*http.Response, error) {
+func (c *Client) Comment(postID int, text string, commentID *int) (*http.Response, error) {
 	data := url.Values{}
 	data.Set("pid", strconv.Itoa(postID))
 	data.Set("text", text)
@@ -386,8 +367,7 @@ func (c *Client) comment(postID int, text string, commentID *int) (*http.Respons
 	return c.httpClient.Do(req)
 }
 
-// report 举报帖子或评论
-func (c *Client) report(tp string, xid int, other, reason string) (*http.Response, error) {
+func (c *Client) Report(tp string, xid int, other, reason string) (*http.Response, error) {
 	var reqURL string
 	var data url.Values
 
@@ -421,8 +401,7 @@ func (c *Client) report(tp string, xid int, other, reason string) (*http.Respons
 	return c.httpClient.Do(req)
 }
 
-// getCourseTable 获取课程表
-func (c *Client) getCourseTable() (*http.Response, error) {
+func (c *Client) GetCourseTable() (*http.Response, error) {
 	req, err := http.NewRequest("GET", string(COURSE_TABLE), nil)
 	if err != nil {
 		return nil, err
@@ -435,8 +414,7 @@ func (c *Client) getCourseTable() (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// getGrade 获取成绩
-func (c *Client) getGrade() (*http.Response, error) {
+func (c *Client) GetGrade() (*http.Response, error) {
 	req, err := http.NewRequest("GET", string(GRADE), nil)
 	if err != nil {
 		return nil, err
@@ -449,8 +427,7 @@ func (c *Client) getGrade() (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// saveCookies 保存cookies到文件
-func (c *Client) saveCookies() error {
+func (c *Client) SaveCookies() error {
 	cookies := c.httpClient.Jar.Cookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"})
 
 	var cookiesList []map[string]interface{}
@@ -468,7 +445,10 @@ func (c *Client) saveCookies() error {
 		cookiesList = append(cookiesList, cookieMap)
 	}
 
-	currentDir, _ := os.Getwd()
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	cookiePath := filepath.Join(currentDir, "cookies.json")
 
 	file, err := os.Create(cookiePath)
@@ -482,9 +462,11 @@ func (c *Client) saveCookies() error {
 	return encoder.Encode(cookiesList)
 }
 
-// loadCookies 从文件加载cookies
-func (c *Client) loadCookies() error {
-	currentDir, _ := os.Getwd()
+func (c *Client) LoadCookies() error {
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 	cookiePath := filepath.Join(currentDir, "cookies.json")
 
 	file, err := os.Open(cookiePath)
@@ -520,8 +502,7 @@ func (c *Client) loadCookies() error {
 	return nil
 }
 
-// 新增方法：获取帖子列表（新API）
-func (c *Client) getPostsList(page, limit, commentLimit, commentStream int) (*http.Response, error) {
+func (c *Client) GetPostsList(page, limit, commentLimit, commentStream int) (*http.Response, error) {
 	params := url.Values{}
 	params.Set("page", strconv.Itoa(page))
 	params.Set("limit", strconv.Itoa(limit))
@@ -534,7 +515,7 @@ func (c *Client) getPostsList(page, limit, commentLimit, commentStream int) (*ht
 		return nil, err
 	}
 
-	req.Header.Set("uuid", "Web_PKUHOLE_2.0.0_WEB_UUID_e3d42031-76d4-4ed9-9416-224b538229d8")
+	req.Header.Set("uuid", c.deviceUUID)
 
 	if c.authorization != "" {
 		req.Header.Set("Authorization", "Bearer "+c.authorization)
@@ -543,8 +524,7 @@ func (c *Client) getPostsList(page, limit, commentLimit, commentStream int) (*ht
 	return c.httpClient.Do(req)
 }
 
-// 新增方法：获取评论列表（新API）
-func (c *Client) getCommentsByPid(pid, page, limit, sort, commentStream int) (*http.Response, error) {
+func (c *Client) GetCommentsByPid(pid, page, limit, sort, commentStream int) (*http.Response, error) {
 	params := url.Values{}
 	params.Set("pid", strconv.Itoa(pid))
 	params.Set("page", strconv.Itoa(page))
@@ -565,9 +545,12 @@ func (c *Client) getCommentsByPid(pid, page, limit, sort, commentStream int) (*h
 	return c.httpClient.Do(req)
 }
 
-// 辅助函数
-func init() {
-	rand.Seed(time.Now().UnixNano())
+func (c *Client) GetHttpClient() *http.Client {
+	return c.httpClient
+}
+
+func (c *Client) GetAuthorization() string {
+	return c.authorization
 }
 
 func randFloat() float64 {
@@ -575,92 +558,7 @@ func randFloat() float64 {
 }
 
 func generateUUID() string {
-	// 简化的UUID生成，只返回最后一部分
 	b := make([]byte, 16)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b[12:16])
-}
-
-func (c *Client) GetPkuToken() string {
-	return c.getPkuToken()
-}
-
-func (c *Client) OAuthLogin(username, password string) (map[string]interface{}, error) {
-	return c.oauthLogin(username, password)
-}
-
-func (c *Client) SSOLogin(token string) error {
-	return c.ssoLogin(token)
-}
-
-func (c *Client) SetPkuToken(token string) {
-	c.setPkuToken(token)
-}
-
-func (c *Client) UnRead() (*http.Response, error) {
-	return c.unRead()
-}
-
-func (c *Client) LoginByToken(token string) (*http.Response, error) {
-	return c.loginByToken(token)
-}
-
-func (c *Client) LoginByMessage(code string) (*http.Response, error) {
-	return c.loginByMessage(code)
-}
-
-func (c *Client) SendMessage() (*http.Response, error) {
-	return c.sendMessage()
-}
-
-func (c *Client) GetPost(postID int) (map[string]interface{}, error) {
-	return c.getPost(postID)
-}
-
-func (c *Client) GetComment(postID, page, limit int, sort string) (map[string]interface{}, error) {
-	return c.getComment(postID, page, limit, sort)
-}
-
-func (c *Client) Search(keyword string, page, limit int, label interface{}) (*http.Response, error) {
-	return c.search(keyword, page, limit, label)
-}
-
-func (c *Client) Follow(postID int) (*http.Response, error) {
-	return c.follow(postID)
-}
-
-func (c *Client) GetFollow(page, limit int) (*http.Response, error) {
-	return c.getFollow(page, limit)
-}
-
-func (c *Client) Comment(postID int, text string, commentID *int) (*http.Response, error) {
-	return c.comment(postID, text, commentID)
-}
-
-func (c *Client) Report(tp string, xid int, other, reason string) (*http.Response, error) {
-	return c.report(tp, xid, other, reason)
-}
-
-func (c *Client) GetCourseTable() (*http.Response, error) {
-	return c.getCourseTable()
-}
-
-func (c *Client) GetGrade() (*http.Response, error) {
-	return c.getGrade()
-}
-
-func (c *Client) SaveCookies() error {
-	return c.saveCookies()
-}
-
-func (c *Client) LoadCookies() error {
-	return c.loadCookies()
-}
-
-func (c *Client) GetPostsList(page, limit, commentLimit, commentStream int) (*http.Response, error) {
-	return c.getPostsList(page, limit, commentLimit, commentStream)
-}
-
-func (c *Client) GetCommentsByPid(pid, page, limit, sort, commentStream int) (*http.Response, error) {
-	return c.getCommentsByPid(pid, page, limit, sort, commentStream)
 }

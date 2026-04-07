@@ -1,0 +1,1184 @@
+package tui
+
+import (
+	"testing"
+
+	"treehole/internal/models"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+func newTestModel() Model {
+	pv := viewport.New(80, 20)
+	cv := viewport.New(80, 20)
+	return Model{
+		Page:            PagePosts,
+		TabCursor:       1,
+		Dialog:          DialogNone,
+		CrawlerState:    CrawlerStopped,
+		CrawlMode:       CrawlSequential,
+		MonitorPages:    3,
+		PostPerPage:     20,
+		PostViewport:    &pv,
+		CommentViewport: &cv,
+		Width:           80,
+		Height:          24,
+		ConfigUsername:  "testuser",
+		ConfigPassword:  "testpass",
+		ConfigSecretKey: "testkey",
+	}
+}
+
+func TestUpdateWindowSize(t *testing.T) {
+	m := newTestModel()
+	m.Width = 0
+	m.Height = 0
+
+	result, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = result.(Model)
+
+	if m.Width != 100 {
+		t.Errorf("Width = %d, want 100", m.Width)
+	}
+	if m.Height != 30 {
+		t.Errorf("Height = %d, want 30", m.Height)
+	}
+}
+
+func TestUpdateLoginMsgSuccess(t *testing.T) {
+	m := newTestModel()
+	m.LoggedIn = false
+
+	result, _ := m.Update(LoginMsg{Username: "testuser"})
+	m = result.(Model)
+
+	if !m.LoggedIn {
+		t.Error("LoggedIn should be true")
+	}
+	if m.LoginUser != "testuser" {
+		t.Errorf("LoginUser = %s, want testuser", m.LoginUser)
+	}
+}
+
+func TestUpdateLoginMsgError(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(LoginMsg{Error: errTest})
+	m = result.(Model)
+
+	if m.LoggedIn {
+		t.Error("LoggedIn should be false on error")
+	}
+	if m.LastError == "" {
+		t.Error("LastError should be set")
+	}
+}
+
+var errTest = &testError{s: "test error"}
+
+type testError struct{ s string }
+
+func (e *testError) Error() string { return e.s }
+
+func TestUpdateLoadStatsMsg(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(LoadStatsMsg{PostCount: 100, CommentCount: 500})
+	m = result.(Model)
+
+	if m.TotalPosts != 100 {
+		t.Errorf("TotalPosts = %d, want 100", m.TotalPosts)
+	}
+	if m.TotalComments != 500 {
+		t.Errorf("TotalComments = %d, want 500", m.TotalComments)
+	}
+}
+
+func TestUpdateLoadPostsMsg(t *testing.T) {
+	m := newTestModel()
+	m.PostListLoading = true
+
+	posts := []models.Post{
+		{Pid: 1, Text: "Post 1", Timestamp: 1000},
+		{Pid: 2, Text: "Post 2", Timestamp: 2000},
+	}
+
+	result, _ := m.Update(LoadPostsMsg{Posts: posts, Total: 50, Page: 1})
+	m = result.(Model)
+
+	if m.PostListLoading {
+		t.Error("PostListLoading should be false after load")
+	}
+	if len(m.PostList) != 2 {
+		t.Errorf("PostList len = %d, want 2", len(m.PostList))
+	}
+	if m.PostListTotal != 50 {
+		t.Errorf("PostListTotal = %d, want 50", m.PostListTotal)
+	}
+	if m.PostListError != "" {
+		t.Errorf("PostListError should be empty, got: %s", m.PostListError)
+	}
+}
+
+func TestUpdateLoadPostsMsgError(t *testing.T) {
+	m := newTestModel()
+	m.PostListLoading = true
+
+	result, _ := m.Update(LoadPostsMsg{Error: errTest})
+	m = result.(Model)
+
+	if m.PostListLoading {
+		t.Error("PostListLoading should be false")
+	}
+	if m.PostListError != "test error" {
+		t.Errorf("PostListError = %s, want 'test error'", m.PostListError)
+	}
+}
+
+func TestUpdateLoadCommentsMsg(t *testing.T) {
+	m := newTestModel()
+
+	comments := []models.Comment{
+		{Cid: 1, Text: "Comment 1", Timestamp: 1000},
+		{Cid: 2, Text: "Comment 2", Timestamp: 2000},
+	}
+
+	result, _ := m.Update(LoadCommentsMsg{Comments: comments})
+	m = result.(Model)
+
+	if len(m.CommentList) != 2 {
+		t.Errorf("CommentList len = %d, want 2", len(m.CommentList))
+	}
+}
+
+func TestUpdateSearchPostsMsg(t *testing.T) {
+	m := newTestModel()
+
+	posts := []models.Post{
+		{Pid: 1, Text: "Search result", Timestamp: 1000},
+	}
+
+	result, _ := m.Update(SearchPostsMsg{Posts: posts, Total: 1, Page: 1})
+	m = result.(Model)
+
+	if !m.SearchActive {
+		t.Error("SearchActive should be true after search")
+	}
+	if m.Searching {
+		t.Error("Searching should be false after results")
+	}
+	if m.PostListTotal != 1 {
+		t.Errorf("PostListTotal = %d, want 1", m.PostListTotal)
+	}
+}
+
+func TestUpdateCrawlMsgError(t *testing.T) {
+	m := newTestModel()
+	m.CrawlerState = CrawlerRunning
+
+	result, _ := m.Update(CrawlMsg{Error: errTest, Page: 1})
+	m = result.(Model)
+
+	if m.CrawlerState != CrawlerError {
+		t.Errorf("CrawlerState = %v, want CrawlerError", m.CrawlerState)
+	}
+	if m.HomeLastError != "test error" {
+		t.Errorf("HomeLastError = %s, want 'test error'", m.HomeLastError)
+	}
+}
+
+func TestUpdateCrawlMsgSuccessReturnsCmd(t *testing.T) {
+	m := newTestModel()
+	m.CrawlerState = CrawlerRunning
+
+	result, cmd := m.Update(CrawlMsg{PostsCount: 10, CommentsCount: 50, Page: 3})
+	m = result.(Model)
+
+	if cmd == nil {
+		t.Error("Expected a cmd to continue crawling")
+	}
+	if m.LastCrawlPage != 3 {
+		t.Errorf("LastCrawlPage = %d, want 3", m.LastCrawlPage)
+	}
+}
+
+func TestUpdateTickMsg(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.Update(TickMsg{})
+	m = result.(Model)
+
+	if cmd == nil {
+		t.Error("TickMsg should return a new tick cmd")
+	}
+}
+
+func TestHandleKeyQuit(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = result
+
+	if cmd == nil {
+		t.Error("q should trigger tea.Quit")
+	}
+}
+
+func TestHandleKeyQuitInDialog(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogHelp
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = result
+
+	if cmd != nil {
+		t.Error("q in dialog should NOT trigger any cmd")
+	}
+	if m.Dialog != DialogHelp {
+		t.Error("Dialog should remain open")
+	}
+}
+
+func TestHandleKeyOpenConfig(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = result
+
+	if m.Dialog != DialogConfig {
+		t.Errorf("Dialog = %v, want DialogConfig", m.Dialog)
+	}
+	if m.ConfigFieldIdx != 0 {
+		t.Errorf("ConfigFieldIdx = %d, want 0", m.ConfigFieldIdx)
+	}
+	if cmd == nil {
+		t.Error("Opening config should trigger loadConfigCmd")
+	}
+}
+
+func TestHandleKeyOpenLogs(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	m = result
+
+	if m.Dialog != DialogLogs {
+		t.Errorf("Dialog = %v, want DialogLogs", m.Dialog)
+	}
+	if !m.LogLoading {
+		t.Error("LogLoading should be true")
+	}
+	if cmd == nil {
+		t.Error("Opening logs should trigger loadLogsCmd")
+	}
+}
+
+func TestHandleKeyOpenHelp(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'h'}})
+	m = result
+
+	if m.Dialog != DialogHelp {
+		t.Errorf("Dialog = %v, want DialogHelp", m.Dialog)
+	}
+	if cmd != nil {
+		t.Error("Opening help should NOT trigger a cmd")
+	}
+}
+
+func TestHandleKeyTabSwitch(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.TabCursor = 1
+
+	result, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = result
+
+	if m.Page != PageHome {
+		t.Errorf("Page = %v, want PageHome", m.Page)
+	}
+	if m.TabCursor != 0 {
+		t.Errorf("TabCursor = %d, want 0", m.TabCursor)
+	}
+}
+
+func TestHandleKeyTabSwitchBack(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.TabCursor = 0
+
+	result, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	m = result
+
+	if m.Page != PagePosts {
+		t.Errorf("Page = %v, want PagePosts", m.Page)
+	}
+	if m.TabCursor != 1 {
+		t.Errorf("TabCursor = %d, want 1", m.TabCursor)
+	}
+}
+
+func TestHandleHomeKeyStartCrawler(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.CrawlerState = CrawlerStopped
+	m.HomeButtonIdx = 0
+
+	result, cmd := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result
+
+	if m.CrawlerState != CrawlerRunning {
+		t.Errorf("CrawlerState = %v, want CrawlerRunning", m.CrawlerState)
+	}
+	if cmd == nil {
+		t.Error("Starting crawler should trigger crawl command")
+	}
+}
+
+func TestHandleHomeKeyStopCrawler(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.CrawlerState = CrawlerRunning
+	m.HomeButtonIdx = 1
+
+	result, _ := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result
+
+	if m.CrawlerState != CrawlerStopped {
+		t.Errorf("CrawlerState = %v, want CrawlerStopped", m.CrawlerState)
+	}
+}
+
+func TestHandleHomeKeyToggleMode(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.HomeButtonIdx = 2
+	m.CrawlMode = CrawlSequential
+
+	result, _ := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result
+
+	if m.CrawlMode != CrawlMonitor {
+		t.Errorf("CrawlMode = %v, want CrawlMonitor", m.CrawlMode)
+	}
+}
+
+func TestHandleHomeKeyButtonNavigation(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.HomeButtonIdx = 0
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
+	if m.HomeButtonIdx != 1 {
+		t.Errorf("HomeButtonIdx = %d, want 1", m.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
+	if m.HomeButtonIdx != 2 {
+		t.Errorf("HomeButtonIdx = %d, want 2", m.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
+	if m.HomeButtonIdx != 2 {
+		t.Errorf("HomeButtonIdx should stay at 2, got %d", m.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.HomeButtonIdx != 1 {
+		t.Errorf("HomeButtonIdx = %d, want 1", m.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.HomeButtonIdx != 0 {
+		t.Errorf("HomeButtonIdx = %d, want 0", m.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
+	if m.HomeButtonIdx != 0 {
+		t.Errorf("HomeButtonIdx should stay at 0, got %d", m.HomeButtonIdx)
+	}
+}
+
+func TestHandlePostsKeySearch(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m = result
+
+	if !m.Searching {
+		t.Error("Searching should be true after /")
+	}
+	if m.SearchInput != "" {
+		t.Errorf("SearchInput = %s, want empty", m.SearchInput)
+	}
+}
+
+func TestHandlePostsKeySearchInput(t *testing.T) {
+	m := newTestModel()
+	m.Searching = true
+
+	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m = result
+
+	if m.SearchInput != "t" {
+		t.Errorf("SearchInput = %s, want 't'", m.SearchInput)
+	}
+
+	result, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
+	m = result
+
+	if m.SearchInput != "te" {
+		t.Errorf("SearchInput = %s, want 'te'", m.SearchInput)
+	}
+}
+
+func TestHandlePostsKeySearchBackspace(t *testing.T) {
+	m := newTestModel()
+	m.Searching = true
+	m.SearchInput = "test"
+
+	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = result
+
+	if m.SearchInput != "tes" {
+		t.Errorf("SearchInput = %s, want 'tes'", m.SearchInput)
+	}
+}
+
+func TestHandlePostsKeySearchCancel(t *testing.T) {
+	m := newTestModel()
+	m.Searching = true
+	m.SearchInput = "test"
+	m.SearchActive = true
+
+	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
+	m = result
+
+	if m.Searching {
+		t.Error("Searching should be false after Escape")
+	}
+	if m.SearchInput != "" {
+		t.Errorf("SearchInput = %s, want empty", m.SearchInput)
+	}
+	if m.SearchActive {
+		t.Error("SearchActive should be false after Escape")
+	}
+}
+
+func TestHandlePostsKeyNavigation(t *testing.T) {
+	m := newTestModel()
+	m.PostList = []models.Post{
+		{Pid: 1, Text: "Post 1", Timestamp: 1000},
+		{Pid: 2, Text: "Post 2", Timestamp: 2000},
+		{Pid: 3, Text: "Post 3", Timestamp: 3000},
+	}
+	m.SelectedPostIdx = 1
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.SelectedPostIdx != 0 {
+		t.Errorf("SelectedPostIdx = %d, want 0", m.SelectedPostIdx)
+	}
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.SelectedPostIdx != 1 {
+		t.Errorf("SelectedPostIdx = %d, want 1", m.SelectedPostIdx)
+	}
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.SelectedPostIdx != 2 {
+		t.Errorf("SelectedPostIdx = %d, want 2", m.SelectedPostIdx)
+	}
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.SelectedPostIdx != 2 {
+		t.Errorf("SelectedPostIdx should stay at 2, got %d", m.SelectedPostIdx)
+	}
+}
+
+func TestHandlePostsKeyEnterDetail(t *testing.T) {
+	m := newTestModel()
+	m.PostList = []models.Post{
+		{Pid: 1, Text: "Post 1", Timestamp: 1000},
+	}
+	m.SelectedPostIdx = 0
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result
+
+	if !m.ShowPostDetail {
+		t.Error("ShowPostDetail should be true")
+	}
+	if m.CurrentPost == nil || m.CurrentPost.Pid != 1 {
+		t.Error("CurrentPost should be set to selected post")
+	}
+	if cmd == nil {
+		t.Error("Should trigger loadCommentsCmd")
+	}
+}
+
+func TestHandlePostsKeyEscFromDetail(t *testing.T) {
+	m := newTestModel()
+	m.ShowPostDetail = true
+	m.CurrentPost = &models.Post{Pid: 1}
+	m.CommentList = []models.Comment{{Cid: 1}}
+
+	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
+	m = result
+
+	if m.ShowPostDetail {
+		t.Error("ShowPostDetail should be false")
+	}
+	if m.CurrentPost != nil {
+		t.Error("CurrentPost should be nil")
+	}
+	if len(m.CommentList) != 0 {
+		t.Error("CommentList should be cleared")
+	}
+}
+
+func TestHandlePostsKeyRefresh(t *testing.T) {
+	m := newTestModel()
+	m.PostList = []models.Post{{Pid: 1}}
+	m.PostListTotal = 10
+	m.SearchActive = false
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = result
+
+	if !m.PostListLoading {
+		t.Error("PostListLoading should be true")
+	}
+	if len(m.PostList) != 0 {
+		t.Error("PostList should be cleared on refresh")
+	}
+	if cmd == nil {
+		t.Error("Should trigger loadPostsCmd")
+	}
+}
+
+func TestHandlePostsKeyRefreshDisabledDuringSearch(t *testing.T) {
+	m := newTestModel()
+	m.SearchActive = true
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = result
+
+	if m.PostListLoading {
+		t.Error("PostListLoading should NOT change during search")
+	}
+	if cmd != nil {
+		t.Error("r during search should NOT trigger reload")
+	}
+}
+
+func TestHandleConfigKeyInput(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 0
+	m.ConfigUsername = ""
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if m.ConfigUsername != "a" {
+		t.Errorf("ConfigUsername = %s, want 'a'", m.ConfigUsername)
+	}
+
+	m.ConfigFieldIdx = 1
+	m.ConfigPassword = ""
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if m.ConfigPassword != "b" {
+		t.Errorf("ConfigPassword = %s, want 'b'", m.ConfigPassword)
+	}
+
+	m.ConfigFieldIdx = 2
+	m.ConfigSecretKey = ""
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.ConfigSecretKey != "c" {
+		t.Errorf("ConfigSecretKey = %s, want 'c'", m.ConfigSecretKey)
+	}
+}
+
+func TestHandleConfigKeyBackspace(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 0
+	m.ConfigUsername = "test"
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.ConfigUsername != "tes" {
+		t.Errorf("ConfigUsername = %s, want 'tes'", m.ConfigUsername)
+	}
+}
+
+func TestHandleConfigKeyNavigation(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 0
+
+	// Down should move from field 0 -> 1 -> 2
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.ConfigFieldIdx != 1 {
+		t.Errorf("ConfigFieldIdx = %d, want 1", m.ConfigFieldIdx)
+	}
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.ConfigFieldIdx != 2 {
+		t.Errorf("ConfigFieldIdx = %d, want 2", m.ConfigFieldIdx)
+	}
+
+	// Down from field 2 should stay at 2 (capped)
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.ConfigFieldIdx != 2 {
+		t.Errorf("ConfigFieldIdx should stay at 2, got %d", m.ConfigFieldIdx)
+	}
+
+	// Up should move from field 2 -> 1 -> 0
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.ConfigFieldIdx != 1 {
+		t.Errorf("ConfigFieldIdx = %d, want 1", m.ConfigFieldIdx)
+	}
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.ConfigFieldIdx != 0 {
+		t.Errorf("ConfigFieldIdx = %d, want 0", m.ConfigFieldIdx)
+	}
+
+	// Up from field 0 should stay at 0
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.ConfigFieldIdx != 0 {
+		t.Errorf("ConfigFieldIdx should stay at 0, got %d", m.ConfigFieldIdx)
+	}
+
+	// Enter on field < 3 moves to save button (idx 3)
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.ConfigFieldIdx != 3 {
+		t.Errorf("ConfigFieldIdx = %d, want 3", m.ConfigFieldIdx)
+	}
+
+	// From idx 3, up should go back to field 2
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.ConfigFieldIdx != 2 {
+		t.Errorf("ConfigFieldIdx = %d, want 2", m.ConfigFieldIdx)
+	}
+}
+
+func TestHandleConfigKeySave(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 3
+
+	result, cmd := m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = result
+
+	if !m.ConfigSaving {
+		t.Error("ConfigSaving should be true")
+	}
+	if cmd == nil {
+		t.Error("Should trigger saveConfigCmd")
+	}
+}
+
+func TestHandleLogsKeyNavigation(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogLogs
+	m.LogLines = []string{"line1", "line2", "line3", "line4", "line5"}
+	m.LogOffset = 2
+
+	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.LogOffset != 3 {
+		t.Errorf("LogOffset = %d, want 3", m.LogOffset)
+	}
+
+	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.LogOffset != 2 {
+		t.Errorf("LogOffset = %d, want 2", m.LogOffset)
+	}
+
+	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.LogOffset != 4 {
+		t.Errorf("LogOffset = %d, want 4", m.LogOffset)
+	}
+
+	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.LogOffset != 0 {
+		t.Errorf("LogOffset = %d, want 0", m.LogOffset)
+	}
+}
+
+func TestHandleLogsKeyRefresh(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogLogs
+
+	result, cmd := m.handleLogsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = result
+
+	if !m.LogLoading {
+		t.Error("LogLoading should be true")
+	}
+	if cmd == nil {
+		t.Error("Should trigger loadLogsCmd")
+	}
+}
+
+func TestHandleDialogEscClose(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+
+	result, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
+	m = result
+
+	if m.Dialog != DialogNone {
+		t.Errorf("Dialog = %v, want DialogNone", m.Dialog)
+	}
+}
+
+func TestSaveConfigMsgSuccess(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(SaveConfigMsg{})
+	m = result.(Model)
+
+	if !m.ConfigSaveOK {
+		t.Error("ConfigSaveOK should be true")
+	}
+	if m.ConfigSaving {
+		t.Error("ConfigSaving should be false")
+	}
+}
+
+func TestSaveConfigMsgError(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(SaveConfigMsg{Error: errTest})
+	m = result.(Model)
+
+	if m.ConfigSaveOK {
+		t.Error("ConfigSaveOK should be false on error")
+	}
+	if m.LastError != "test error" {
+		t.Errorf("LastError = %s, want 'test error'", m.LastError)
+	}
+}
+
+func TestLoadConfigMsgNilConfig(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(LoadConfigMsg{Config: nil})
+	m = result.(Model)
+
+	// nil config should not crash or change fields unexpectedly
+	if m.Config != nil {
+		t.Error("Config should remain nil")
+	}
+}
+
+func TestViewHomeContainsExpectedText(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.LoggedIn = true
+	m.LoginUser = "testuser"
+	m.CrawlerState = CrawlerStopped
+	m.TotalPosts = 100
+	m.TotalComments = 500
+	m.LastCrawlPage = 5
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	expectedStrings := []string{
+		"PKUHole Crawler",
+		"已登录",
+		"testuser",
+		"已停止",
+		"帖子总数",
+		"100",
+		"评论总数",
+		"500",
+		"启动爬虫",
+		"停止爬虫",
+		"顺序爬取",
+	}
+
+	for _, s := range expectedStrings {
+		if !containsStr(output, s) {
+			t.Errorf("View() output missing expected string: %q", s)
+		}
+	}
+}
+
+func TestViewHomeCrawlerRunning(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.CrawlerState = CrawlerRunning
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "运行中") {
+		t.Error("View() should show '运行中' when crawler is running")
+	}
+}
+
+func TestViewHomeCrawlerError(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.CrawlerState = CrawlerError
+	m.HomeLastError = "connection timeout"
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "错误") {
+		t.Error("View() should show '错误' when crawler has error")
+	}
+	if !containsStr(output, "connection timeout") {
+		t.Error("View() should show the last error message")
+	}
+}
+
+func TestViewHomeMonitorMode(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.CrawlMode = CrawlMonitor
+	m.MonitorPages = 3
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "监控模式") {
+		t.Error("View() should show '监控模式' in monitor mode")
+	}
+	if !containsStr(output, "3") {
+		t.Error("View() should show monitor page count")
+	}
+}
+
+func TestViewPostsEmpty(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.PostList = nil
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "帖子列表") {
+		t.Error("View() should show '帖子列表' header")
+	}
+	if !containsStr(output, "暂无数据") {
+		t.Error("View() should show '暂无数据' when empty")
+	}
+}
+
+func TestViewPostsContainsPostText(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.PostList = []models.Post{
+		{Pid: 1, Text: "Hello World", Timestamp: 1000, Reply: 5, Likenum: 10, Anonymous: true},
+	}
+	m.SelectedPostIdx = 0
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "Hello World") {
+		t.Error("View() should contain post text 'Hello World'")
+	}
+	if !containsStr(output, "#1") {
+		t.Error("View() should contain post pid '#1'")
+	}
+	if !containsStr(output, "回复:5") {
+		t.Error("View() should contain reply count")
+	}
+	if !containsStr(output, "赞:10") {
+		t.Error("View() should contain like count")
+	}
+}
+
+func TestViewPostsNonAnonymous(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.PostList = []models.Post{
+		{Pid: 1, Text: "Real name post", Timestamp: 1000, Anonymous: false},
+	}
+	m.SelectedPostIdx = 0
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "实名") {
+		t.Error("View() should show '实名' for non-anonymous post")
+	}
+}
+
+func TestViewPostsSearchActive(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.SearchActive = true
+	m.SearchInput = "test"
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "搜索结果") {
+		t.Error("View() should show '搜索结果' when search is active")
+	}
+	if !containsStr(output, "test") {
+		t.Error("View() should show search keyword")
+	}
+}
+
+func TestViewPostsSearching(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Searching = true
+	m.SearchInput = "hello"
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "hello") {
+		t.Error("View() should show search input when searching")
+	}
+}
+
+func TestViewPostDetail(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.ShowPostDetail = true
+	m.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	m.CommentList = []models.Comment{
+		{Cid: 1, Text: "First comment", Timestamp: 1100, NameTag: "user1"},
+		{Cid: 2, Text: "Second comment", Timestamp: 1200, NameTag: "user2"},
+	}
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "#42") {
+		t.Error("View() should show post pid")
+	}
+	if !containsStr(output, "Detail post text") {
+		t.Error("View() should show post text")
+	}
+	if !containsStr(output, "First comment") {
+		t.Error("View() should show first comment")
+	}
+	if !containsStr(output, "Second comment") {
+		t.Error("View() should show second comment")
+	}
+	if !containsStr(output, "Esc") {
+		t.Error("View() should show Esc hint")
+	}
+}
+
+func TestViewPostDetailEmptyComments(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.ShowPostDetail = true
+	m.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
+	m.CommentList = nil
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "暂无评论") {
+		t.Error("View() should show '暂无评论'")
+	}
+}
+
+func TestViewConfigDialog(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 0
+	m.ConfigUsername = "testuser"
+	m.ConfigPassword = "secret"
+	m.ConfigSecretKey = "KEY123"
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "配置管理") {
+		t.Error("View() should show '配置管理'")
+	}
+	if !containsStr(output, "testuser") {
+		t.Error("View() should show username")
+	}
+	if !containsStr(output, "保存配置") {
+		t.Error("View() should show save button")
+	}
+}
+
+func TestViewConfigDialogMaskedPassword(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigFieldIdx = 0
+	m.ConfigPassword = "mypassword"
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if containsStr(output, "mypassword") {
+		t.Error("View() should NOT show plaintext password")
+	}
+}
+
+func TestViewHelpDialog(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogHelp
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	expectedStrings := []string{
+		"快捷键帮助",
+		"打开/关闭此帮助菜单",
+		"打开配置管理",
+		"搜索帖子",
+		"刷新",
+	}
+
+	for _, s := range expectedStrings {
+		if !containsStr(output, s) {
+			t.Errorf("View() missing expected string: %q", s)
+		}
+	}
+}
+
+func TestViewLogsDialog(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogLogs
+	m.LogLines = []string{"2024-01-01 INFO: started", "2024-01-01 INFO: done"}
+	m.LogOffset = 0
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "运行日志") {
+		t.Error("View() should show '运行日志'")
+	}
+	if !containsStr(output, "started") {
+		t.Error("View() should show log content")
+	}
+}
+
+func TestViewLogsDialogEmpty(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogLogs
+	m.LogLines = nil
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "暂无日志") {
+		t.Error("View() should show '暂无日志'")
+	}
+}
+
+func TestViewDefaultDimensions(t *testing.T) {
+	m := newTestModel()
+	m.Width = 0
+	m.Height = 0
+
+	output := m.View()
+
+	// Should not panic and should produce output
+	if output == "" {
+		t.Error("View() should produce output even with zero dimensions")
+	}
+}
+
+func TestCalcPostViewportHeight(t *testing.T) {
+	m := newTestModel()
+	m.Height = 24
+
+	h := m.calcPostViewportHeight()
+	if h < 3 {
+		t.Errorf("calcPostViewportHeight = %d, should be >= 3", h)
+	}
+}
+
+func TestCalcPostViewportHeightSmall(t *testing.T) {
+	m := newTestModel()
+	m.Height = 5
+
+	h := m.calcPostViewportHeight()
+	if h != 3 {
+		t.Errorf("calcPostViewportHeight = %d, want 3 (minimum)", h)
+	}
+}
+
+func TestMaskField(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    string
+		mask     bool
+		expected string
+	}{
+		{"empty no mask", "", false, "(空)"},
+		{"empty mask", "", true, "(空)"},
+		{"visible", "hello", false, "hello"},
+		{"masked", "secret", true, "******"},
+		{"single masked", "a", true, "*"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := maskField(tt.value, tt.mask)
+			if result != tt.expected {
+				t.Errorf("maskField(%q, %v) = %q, want %q", tt.value, tt.mask, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestMinInt(t *testing.T) {
+	tests := []struct {
+		a, b, expected int
+	}{
+		{1, 2, 1},
+		{5, 3, 3},
+		{0, 0, 0},
+		{-1, 1, -1},
+		{100, 100, 100},
+	}
+
+	for _, tt := range tests {
+		result := minInt(tt.a, tt.b)
+		if result != tt.expected {
+			t.Errorf("minInt(%d, %d) = %d, want %d", tt.a, tt.b, result, tt.expected)
+		}
+	}
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && searchStr(s, substr)
+}
+
+func searchStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

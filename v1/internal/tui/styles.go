@@ -24,7 +24,8 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorMidGray).
 			BorderBottom(true).
-			Padding(0, 1)
+			Padding(0, 1).
+			Background(colorBlack)
 
 	tabItemStyle = lipgloss.NewStyle().
 			Padding(0, 2).
@@ -44,7 +45,8 @@ var (
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(colorMidGray).
 			BorderTop(true).
-			Padding(0, 1)
+			Padding(0, 1).
+			Background(colorBlack)
 
 	vTitleStyle = lipgloss.NewStyle().
 			Foreground(colorWhite).
@@ -155,7 +157,7 @@ var (
 				Padding(1, 0)
 
 	vPostPidStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
+			Foreground(lipgloss.Color("#87CEEB")).
 			Bold(true)
 
 	vPostTextStyle = lipgloss.NewStyle().
@@ -164,6 +166,15 @@ var (
 
 	vPostMetaStyle = lipgloss.NewStyle().
 			Foreground(colorGray)
+
+	vPostTimeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#90EE90"))
+
+	vPostReplyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFA500"))
+
+	vPostLikeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF69B4"))
 
 	vDividerStyle = lipgloss.NewStyle().
 			Foreground(colorMidGray)
@@ -204,4 +215,21 @@ var (
 
 	vLogLineStyle = lipgloss.NewStyle().
 			Foreground(colorLightGray)
+
+	// Dialog styles
+	vDialogTitleStyle = lipgloss.NewStyle().
+				Foreground(colorPink).
+				Bold(true).
+				Padding(0, 1)
+
+	vDialogHelpStyle = lipgloss.NewStyle().
+				Foreground(colorGray).
+				Padding(1, 0)
+
+	dialogCard = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorPink).
+			Padding(1, 3).
+			Background(colorBlack).
+			Width(70)
 )

@@ -89,9 +89,13 @@ func (m PostsModel) View() string {
 
 			ts := time.Unix(int64(post.Timestamp), 0).Format("2006-01-02 15:04")
 
-			line := fmt.Sprintf("#%-6d %-10s %s", post.Pid, ts, text)
-			if post.Anonymous == 0 {
-				line = fmt.Sprintf("#%-6d %-10s [实名] %s", post.Pid, ts, text)
+			pidStr := pPostPidStyle.Render(fmt.Sprintf("#%-6d", post.Pid))
+			tsStr := pPostTimeStyle.Render(fmt.Sprintf("%-10s", ts))
+			replyStr := pPostReplyStyle.Render(fmt.Sprintf("回复:%d", post.Reply))
+			likeStr := pPostLikeStyle.Render(fmt.Sprintf("赞:%d", post.Likenum))
+			line := pidStr + " " + tsStr + " " + replyStr + " " + likeStr + " " + text
+			if !post.Anonymous {
+				line = pidStr + " " + tsStr + " [实名] " + replyStr + " " + likeStr + " " + text
 			}
 
 			b.WriteString(style.Render(line))
@@ -124,11 +128,11 @@ func (m PostsModel) postDetailView() string {
 	ts := time.Unix(int64(m.CurrentPost.Timestamp), 0).Format("2006-01-02 15:04")
 	b.WriteString(pPostPidStyle.Render(fmt.Sprintf("#%d", m.CurrentPost.Pid)))
 	b.WriteString("  ")
-	b.WriteString(pPostMetaStyle.Render(ts))
-	b.WriteString(fmt.Sprintf("  回复: %d  点赞: %d", m.CurrentPost.Reply, m.CurrentPost.Likenum))
-	if m.CurrentPost.Tag != "" {
-		b.WriteString("  标签: " + m.CurrentPost.Tag)
-	}
+	b.WriteString(pPostTimeStyle.Render(ts))
+	b.WriteString("  ")
+	b.WriteString(pPostReplyStyle.Render(fmt.Sprintf("回复: %d", m.CurrentPost.Reply)))
+	b.WriteString("  ")
+	b.WriteString(pPostLikeStyle.Render(fmt.Sprintf("点赞: %d", m.CurrentPost.Likenum)))
 	b.WriteString("\n\n")
 
 	b.WriteString(pPostTextStyle.Render(m.CurrentPost.Text))
@@ -149,7 +153,7 @@ func (m PostsModel) postDetailView() string {
 				style = pListItemSelectedStyle
 			}
 
-			cName := c.Name
+			cName := c.NameTag
 			if cName == "" {
 				cName = "匿名"
 			}

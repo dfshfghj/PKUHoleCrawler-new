@@ -112,7 +112,7 @@ var (
 				Padding(1, 0)
 
 	pPostPidStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFFFFF")).
+			Foreground(lipgloss.Color("#87CEEB")).
 			Bold(true)
 
 	pPostTextStyle = lipgloss.NewStyle().
@@ -121,6 +121,15 @@ var (
 
 	pPostMetaStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#888888"))
+
+	pPostTimeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#90EE90"))
+
+	pPostReplyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFA500"))
+
+	pPostLikeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF69B4"))
 
 	pDividerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#4A4A4A"))

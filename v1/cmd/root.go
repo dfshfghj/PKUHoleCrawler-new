@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"treehole/internal/config"
 	"treehole/internal/crawler"
 	"treehole/internal/db"
 	"treehole/internal/tui"
@@ -25,14 +26,18 @@ func init() {
 }
 
 var (
-	dbPath       string
-	daemonMode   bool
-	startPage    int
-	pages        int
-	interval     int
-	roundIntval  int
-	resume       bool
-	monitorPages int
+	dbPath          string
+	startPage       int
+	maxPages        int
+	pageInterval    int
+	loopInterval    int
+	resume          bool
+	loopPages       int
+	saveJSON        bool
+	postsPerReq     int
+	commentsPerPost int
+	fetchImages     bool
+	convertWebp     bool
 )
 
 func NewRootCmd() *cobra.Command {
@@ -45,7 +50,7 @@ func NewRootCmd() *cobra.Command {
 		},
 	}
 
-	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "./test-data.db", "database file path")
+	rootCmd.PersistentFlags().StringVar(&dbPath, "db-path", "./treehole.db", "database file path")
 
 	rootCmd.AddCommand(newServerCmd())
 	rootCmd.AddCommand(newCrawlerCmd())
@@ -54,7 +59,13 @@ func NewRootCmd() *cobra.Command {
 }
 
 func initDB() (*db.Database, func(), error) {
-	database, err := db.NewDatabase(dbPath)
+	// 加载配置文件以获取数据库配置
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("加载配置文件失败: %w", err)
+	}
+
+	database, err := db.NewDatabase(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("初始化数据库失败: %w", err)
 	}
@@ -105,20 +116,24 @@ func runDaemon() error {
 	}
 
 	if resume {
-		count, _ := database.GetPostCount()
+		count, err := database.GetPostCount()
+		if err != nil {
+			log.Printf("[Daemon] 无法获取帖子计数: %v", err)
+			return fmt.Errorf("获取帖子计数失败: %w", err)
+		}
 		if count > 0 {
 			startPage = (count / 100) + 1
 			log.Printf("[Daemon] 断点续爬模式: 从第 %d 页开始 (已有 %d 条帖子)", startPage, count)
 		}
 	}
 
-	monitorMode := monitorPages > 0
+	monitorMode := loopPages > 0
 	if monitorMode {
-		log.Printf("[Daemon] 监控模式启动: 循环抓取前 %d 页, 每轮间隔 %ds", monitorPages, roundIntval)
-	} else if pages == 0 {
-		log.Printf("[Daemon] 无限抓取模式启动: 从第 %d 页开始, 每页间隔 %ds", startPage, interval)
+		log.Printf("[Daemon] 监控模式启动: 循环抓取前 %d 页, 每轮间隔 %ds", loopPages, loopInterval)
+	} else if maxPages == 0 {
+		log.Printf("[Daemon] 无限抓取模式启动: 从第 %d 页开始, 每页间隔 %ds", startPage, pageInterval)
 	} else {
-		log.Printf("[Daemon] 一次性抓取模式启动: 从第 %d 页开始, 抓取 %d 页", startPage, pages)
+		log.Printf("[Daemon] 一次性抓取模式启动: 从第 %d 页开始, 抓取 %d 页", startPage, maxPages)
 	}
 
 	page := startPage
@@ -130,6 +145,14 @@ func runDaemon() error {
 		select {
 		case <-sigCh:
 			log.Printf("[Daemon] 收到退出信号，正在优雅停止...")
+			if saveJSON && crawler.RawResponses() > 0 {
+				// 保存所有收集的原始响应到JSON文件
+				if err := crawler.SaveRawResponsesToFile(); err != nil {
+					log.Printf("[Daemon] 保存原始响应到JSON文件失败: %v", err)
+				} else {
+					log.Printf("[Daemon] 原始响应已保存到JSON文件")
+				}
+			}
 			return nil
 		default:
 		}
@@ -142,9 +165,9 @@ func runDaemon() error {
 		log.Printf("[Daemon] 开始第 %d 轮抓取", round)
 
 		crawled := 0
-		limit := pages
+		limit := maxPages
 		if monitorMode {
-			limit = monitorPages
+			limit = loopPages
 		}
 
 		for {
@@ -159,10 +182,10 @@ func runDaemon() error {
 				break
 			}
 
-			result, err := crawler.FetchAndSave(client, database, page)
+			result, err := crawler.FetchAndSave(client, database, page, saveJSON, postsPerReq, commentsPerPost, fetchImages, convertWebp)
 			if err != nil {
 				log.Printf("[Daemon] 第 %d 页抓取失败: %v", page, err)
-				time.Sleep(time.Duration(interval) * time.Second)
+				time.Sleep(time.Duration(pageInterval) * time.Second)
 				page++
 				continue
 			}
@@ -182,23 +205,39 @@ func runDaemon() error {
 				break
 			}
 
-			time.Sleep(time.Duration(interval) * time.Second)
+			time.Sleep(time.Duration(pageInterval) * time.Second)
 		}
 
-		if !monitorMode && pages > 0 {
+		if !monitorMode && maxPages > 0 {
 			log.Printf("[Daemon] 抓取完成! 共处理 %d 页, +%d帖子 +%d评论", crawled, totalPosts, totalComments)
+			if saveJSON {
+				// 保存所有收集的原始响应到JSON文件
+				if err := crawler.SaveRawResponsesToFile(); err != nil {
+					log.Printf("[Daemon] 保存原始响应到JSON文件失败: %v", err)
+				} else {
+					log.Printf("[Daemon] 原始响应已保存到JSON文件")
+				}
+			}
 			return nil
 		}
 
 		if monitorMode {
-			log.Printf("[Daemon] 第 %d 轮完成, 等待 %ds 后开始下一轮...", round, roundIntval)
+			log.Printf("[Daemon] 第 %d 轮完成, 等待 %ds 后开始下一轮...", round, loopInterval)
 		}
 
 		select {
 		case <-sigCh:
 			log.Printf("[Daemon] 收到退出信号，正在优雅停止...")
+			if saveJSON && crawler.RawResponses() > 0 {
+				// 保存所有收集的原始响应到JSON文件
+				if err := crawler.SaveRawResponsesToFile(); err != nil {
+					log.Printf("[Daemon] 保存原始响应到JSON文件失败: %v", err)
+				} else {
+					log.Printf("[Daemon] 原始响应已保存到JSON文件")
+				}
+			}
 			return nil
-		case <-time.After(time.Duration(roundIntval) * time.Second):
+		case <-time.After(time.Duration(loopInterval) * time.Second):
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"treehole/internal/db"
 	"treehole/internal/models"
 
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -16,8 +17,15 @@ type Page int
 const (
 	PageHome Page = iota
 	PagePosts
-	PageConfig
-	PageLogs
+)
+
+type DialogType int
+
+const (
+	DialogNone DialogType = iota
+	DialogConfig
+	DialogLogs
+	DialogHelp
 )
 
 type CrawlerState int
@@ -82,16 +90,27 @@ type SaveConfigMsg struct {
 	Error error
 }
 
+type CrawlMode int
+
+const (
+	CrawlSequential CrawlMode = iota
+	CrawlMonitor
+)
+
 type Model struct {
 	Page      Page
 	Width     int
 	Height    int
 	TabCursor int
 
+	Dialog DialogType
+
 	LoggedIn     bool
 	LoginUser    string
 	CrawlerState CrawlerState
 	CrawlerStart time.Time
+	CrawlMode    CrawlMode
+	MonitorPages int
 	Database     *db.Database
 	Client       *client.Client
 	Config       *config.Config
@@ -106,27 +125,31 @@ type Model struct {
 
 	PostList        []models.Post
 	PostListTotal   int
-	PostListPage    int
-	PostListPerPage int
-	PostListCursor  int
 	PostListLoading bool
 	PostListError   string
+	PostPerPage     int
+	PostViewport    *viewport.Model
+	postContent     string
+	SelectedPostIdx int
 
-	ShowPostDetail bool
-	CurrentPost    *models.Post
-	CommentList    []models.Comment
-	CommentCursor  int
+	ShowPostDetail  bool
+	CurrentPost     *models.Post
+	CommentList     []models.Comment
+	CommentViewport *viewport.Model
+	commentContent  string
 
-	Searching    bool
-	SearchInput  string
-	SearchActive bool
+	Searching      bool
+	SearchInput    string
+	SearchActive   bool
+	SearchResults  []models.Post
+	SearchTotal    int
+	SearchViewport *viewport.Model
 
 	ConfigUsername  string
 	ConfigPassword  string
 	ConfigSecretKey string
 	ConfigFieldIdx  int
 	ConfigSaving    bool
-	ConfigSaved     bool
 	ConfigSaveOK    bool
 
 	LogLines   []string
@@ -137,15 +160,21 @@ type Model struct {
 }
 
 func NewModel(database *db.Database, client *client.Client, cfg *config.Config) Model {
+	pv := viewport.New(0, 0)
+	cv := viewport.New(0, 0)
 	return Model{
-		Page:            PageHome,
-		TabCursor:       0,
+		Page:            PagePosts,
+		TabCursor:       1,
+		Dialog:          DialogNone,
 		Database:        database,
 		Client:          client,
 		Config:          cfg,
 		CrawlerState:    CrawlerStopped,
-		PostListPerPage: 10,
-		PostListPage:    1,
+		CrawlMode:       CrawlSequential,
+		MonitorPages:    3,
+		PostPerPage:     20,
+		PostViewport:    &pv,
+		CommentViewport: &cv,
 		ConfigUsername:  cfg.Username,
 		ConfigPassword:  cfg.Password,
 		ConfigSecretKey: cfg.SecretKey,
@@ -162,6 +191,14 @@ func (m Model) Init() tea.Cmd {
 			pc, _ := m.Database.GetPostCount()
 			cc, _ := m.Database.GetCommentCount()
 			return LoadStatsMsg{PostCount: pc, CommentCount: cc}
+		},
+		func() tea.Msg {
+			posts, err := m.Database.GetPosts(0, m.PostPerPage)
+			if err != nil {
+				return LoadPostsMsg{Error: err}
+			}
+			total, _ := m.Database.GetPostCount()
+			return LoadPostsMsg{Posts: posts, Total: total, Page: 1}
 		},
 		tickCmd(),
 	)
