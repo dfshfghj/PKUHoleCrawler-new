@@ -1,235 +1,460 @@
 package tui
 
 import (
+	"os"
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
+type themePalette struct {
+	bg           lipgloss.TerminalColor
+	surface      lipgloss.TerminalColor
+	border       lipgloss.TerminalColor
+	muted        lipgloss.TerminalColor
+	text         lipgloss.TerminalColor
+	textSoft     lipgloss.TerminalColor
+	accent       lipgloss.TerminalColor
+	accentStrong lipgloss.TerminalColor
+	accentSoft   lipgloss.TerminalColor
+	accentText   lipgloss.TerminalColor
+	link         lipgloss.TerminalColor
+	success      lipgloss.TerminalColor
+	warning      lipgloss.TerminalColor
+}
+
 var (
-	// Black/white theme with pink accent
-	colorBlack     = lipgloss.Color("#000000")
-	colorDarkGray  = lipgloss.Color("#1A1A1A")
-	colorMidGray   = lipgloss.Color("#4A4A4A")
-	colorGray      = lipgloss.Color("#888888")
-	colorLightGray = lipgloss.Color("#B0B0B0")
-	colorWhite     = lipgloss.Color("#FFFFFF")
-	colorPink      = lipgloss.Color("#FF69B4")
-	colorPinkDark  = lipgloss.Color("#CC5588")
-	colorPinkBg    = lipgloss.Color("#2A1520")
+	colorBg           lipgloss.TerminalColor
+	colorSurface      lipgloss.TerminalColor
+	colorBorder       lipgloss.TerminalColor
+	colorMuted        lipgloss.TerminalColor
+	colorText         lipgloss.TerminalColor
+	colorTextSoft     lipgloss.TerminalColor
+	colorAccent       lipgloss.TerminalColor
+	colorAccentStrong lipgloss.TerminalColor
+	colorAccentSoft   lipgloss.TerminalColor
+	colorAccentText   lipgloss.TerminalColor
+	colorLink         lipgloss.TerminalColor
+	colorSuccess      lipgloss.TerminalColor
+	colorWarning      lipgloss.TerminalColor
+
+	baseStyle lipgloss.Style
+
+	tabBarStyle lipgloss.Style
+
+	tabItemStyle lipgloss.Style
+
+	tabItemActiveStyle lipgloss.Style
+
+	contentStyle lipgloss.Style
+
+	footerStyle lipgloss.Style
+
+	vTitleStyle lipgloss.Style
+
+	vSubtitleStyle lipgloss.Style
+
+	vSectionTitleStyle lipgloss.Style
+
+	vSectionTitleFocused lipgloss.Style
+
+	vDetailSectionFocused lipgloss.Style
+
+	vDetailSection lipgloss.Style
+
+	vStatusCard lipgloss.Style
+
+	vStatsCard lipgloss.Style
+
+	vStatLabelStyle lipgloss.Style
+
+	vStatValueStyle lipgloss.Style
+
+	vStatusRunningStyle lipgloss.Style
+
+	vStatusStoppedStyle lipgloss.Style
+
+	vButtonDefault lipgloss.Style
+
+	vButtonActive lipgloss.Style
+
+	vButtonActiveDanger lipgloss.Style
+
+	vButtonDisabled lipgloss.Style
+
+	vErrorStyle lipgloss.Style
+
+	vHelpStyle lipgloss.Style
+
+	vListItemStyle lipgloss.Style
+
+	vListItemSelectedStyle lipgloss.Style
+
+	vSearchInput lipgloss.Style
+
+	vSearchInputFocused lipgloss.Style
+
+	vLoadingStyle lipgloss.Style
+
+	vEmptyStyle lipgloss.Style
+
+	vPaginationStyle lipgloss.Style
+
+	vPostPidStyle lipgloss.Style
+
+	vPostTextStyle lipgloss.Style
+
+	vPostMetaStyle lipgloss.Style
+
+	vPostTimeStyle lipgloss.Style
+
+	vPostReplyStyle lipgloss.Style
+
+	vPostLikeStyle lipgloss.Style
+
+	vCommentQuoteStyle lipgloss.Style
+
+	vDividerStyle lipgloss.Style
+
+	vFormLabelStyle lipgloss.Style
+
+	vFormInput lipgloss.Style
+
+	vFormInputFocused lipgloss.Style
+
+	vFormSaveBtn lipgloss.Style
+
+	vFormSaveActive lipgloss.Style
+
+	vLogLineStyle lipgloss.Style
+
+	vDialogTitleStyle lipgloss.Style
+
+	vDialogHelpStyle lipgloss.Style
+
+	dialogCard lipgloss.Style
+)
+
+func init() {
+	applyTheme("")
+}
+
+func applyTheme(mode string) {
+	palette := paletteForTheme(resolveThemeMode(mode))
+
+	colorBg = palette.bg
+	colorSurface = palette.surface
+	colorBorder = palette.border
+	colorMuted = palette.muted
+	colorText = palette.text
+	colorTextSoft = palette.textSoft
+	colorAccent = palette.accent
+	colorAccentStrong = palette.accentStrong
+	colorAccentSoft = palette.accentSoft
+	colorAccentText = palette.accentText
+	colorLink = palette.link
+	colorSuccess = palette.success
+	colorWarning = palette.warning
 
 	baseStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Background(colorBlack)
+		Foreground(colorText).
+		Background(colorBg)
 
 	tabBarStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(colorMidGray).
-			BorderBottom(true).
-			Padding(0, 1).
-			Background(colorBlack)
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		BorderBottom(true).
+		Padding(0, 1).
+		Background(colorBg)
 
 	tabItemStyle = lipgloss.NewStyle().
-			Padding(0, 2).
-			Foreground(colorGray)
+		Padding(0, 2).
+		Foreground(colorMuted)
 
 	tabItemActiveStyle = lipgloss.NewStyle().
-				Padding(0, 2).
-				Foreground(colorPink).
-				Bold(true).
-				Background(colorPinkBg)
+		Padding(0, 2).
+		Foreground(colorAccent).
+		Bold(true).
+		Background(colorAccentSoft)
 
 	contentStyle = lipgloss.NewStyle().
-			Padding(1, 2)
+		Padding(1, 2)
 
 	footerStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(colorMidGray).
-			BorderTop(true).
-			Padding(0, 1).
-			Background(colorBlack)
+		Foreground(colorMuted).
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		BorderTop(true).
+		Padding(0, 1).
+		Background(colorBg)
 
 	vTitleStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Bold(true).
-			Padding(0, 1)
+		Foreground(colorText).
+		Bold(true).
+		Padding(0, 1)
 
 	vSubtitleStyle = lipgloss.NewStyle().
-			Foreground(colorLightGray).
-			Bold(true).
-			Padding(0, 1)
+		Foreground(colorTextSoft).
+		Bold(true).
+		Padding(0, 1)
+
+	vSectionTitleStyle = lipgloss.NewStyle().
+		Foreground(colorTextSoft).
+		Bold(true).
+		Padding(0, 1)
+
+	vSectionTitleFocused = lipgloss.NewStyle().
+		Foreground(colorAccentText).
+		Background(colorAccent).
+		Bold(true).
+		Padding(0, 1)
+
+	vDetailSectionFocused = lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorAccent).
+		Padding(0, 0, 0, 1)
+
+	vDetailSection = lipgloss.NewStyle().
+		Padding(0, 0, 0, 2)
 
 	vStatusCard = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorMidGray).
-			Padding(1, 2).
-			Background(colorDarkGray)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(1, 2).
+		Background(colorSurface)
 
 	vStatsCard = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorMidGray).
-			Padding(1, 2).
-			Background(colorDarkGray)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorBorder).
+		Padding(1, 2).
+		Background(colorSurface)
 
 	vStatLabelStyle = lipgloss.NewStyle().
-			Foreground(colorGray)
+		Foreground(colorMuted)
 
 	vStatValueStyle = lipgloss.NewStyle().
-			Foreground(colorWhite).
-			Bold(true)
+		Foreground(colorText).
+		Bold(true)
 
 	vStatusRunningStyle = lipgloss.NewStyle().
-				Foreground(colorWhite).
-				Bold(true)
+		Foreground(colorText).
+		Bold(true)
 
 	vStatusStoppedStyle = lipgloss.NewStyle().
-				Foreground(colorGray).
-				Bold(true)
+		Foreground(colorMuted).
+		Bold(true)
 
 	vButtonDefault = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Background(colorMidGray).
-			Padding(0, 2).
-			Margin(0, 1).
-			Bold(true)
+		Foreground(colorTextSoft).
+		Background(colorBorder).
+		Padding(0, 2).
+		Margin(0, 1).
+		Bold(true)
 
 	vButtonActive = lipgloss.NewStyle().
-			Foreground(colorBlack).
-			Background(colorPink).
-			Padding(0, 2).
-			Margin(0, 1).
-			Bold(true)
+		Foreground(colorAccentText).
+		Background(colorAccent).
+		Padding(0, 2).
+		Margin(0, 1).
+		Bold(true)
 
 	vButtonActiveDanger = lipgloss.NewStyle().
-				Foreground(colorBlack).
-				Background(colorPinkDark).
-				Padding(0, 2).
-				Margin(0, 1).
-				Bold(true)
+		Foreground(colorAccentText).
+		Background(colorAccentStrong).
+		Padding(0, 2).
+		Margin(0, 1).
+		Bold(true)
 
 	vButtonDisabled = lipgloss.NewStyle().
-			Foreground(colorMidGray).
-			Background(colorDarkGray).
-			Padding(0, 2).
-			Margin(0, 1)
+		Foreground(colorBorder).
+		Background(colorSurface).
+		Padding(0, 2).
+		Margin(0, 1)
 
 	vErrorStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Padding(0, 1)
+		Foreground(colorMuted).
+		Padding(0, 1)
 
 	vHelpStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Padding(1, 0)
+		Foreground(colorMuted).
+		Padding(1, 0)
 
 	vListItemStyle = lipgloss.NewStyle().
-			Padding(0, 1).
-			Foreground(colorLightGray)
+		Padding(0, 1).
+		Foreground(colorTextSoft)
 
 	vListItemSelectedStyle = lipgloss.NewStyle().
-				Foreground(colorPink).
-				Background(colorPinkBg).
-				Padding(0, 1).
-				Bold(true)
+		Foreground(colorAccent).
+		Background(colorAccentSoft).
+		Padding(0, 1).
+		Bold(true)
 
 	vSearchInput = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(colorMidGray).
-			Padding(0, 1).
-			Width(60).
-			Foreground(colorGray)
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(60).
+		Foreground(colorMuted)
 
 	vSearchInputFocused = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(colorPink).
-				Padding(0, 1).
-				Width(60).
-				Foreground(colorWhite)
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorAccent).
+		Padding(0, 1).
+		Width(60).
+		Foreground(colorText)
 
 	vLoadingStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Padding(1, 0)
+		Foreground(colorMuted).
+		Padding(1, 0)
 
 	vEmptyStyle = lipgloss.NewStyle().
-			Foreground(colorMidGray).
-			Padding(1, 0)
+		Foreground(colorBorder).
+		Padding(1, 0)
 
 	vPaginationStyle = lipgloss.NewStyle().
-				Foreground(colorGray).
-				Padding(1, 0)
+		Foreground(colorMuted).
+		Padding(1, 0)
 
 	vPostPidStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#87CEEB")).
-			Bold(true)
+		Foreground(colorLink).
+		Bold(true)
 
 	vPostTextStyle = lipgloss.NewStyle().
-			Foreground(colorLightGray).
-			Padding(0, 0, 0, 2)
+		Foreground(colorTextSoft).
+		Padding(0, 0, 0, 2)
 
 	vPostMetaStyle = lipgloss.NewStyle().
-			Foreground(colorGray)
+		Foreground(colorMuted)
 
 	vPostTimeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#90EE90"))
+		Foreground(colorSuccess)
 
 	vPostReplyStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFA500"))
+		Foreground(colorWarning)
 
 	vPostLikeStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF69B4"))
+		Foreground(colorAccent)
+
+	vCommentQuoteStyle = lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorBorder).
+		Padding(0, 0, 0, 1)
 
 	vDividerStyle = lipgloss.NewStyle().
-			Foreground(colorMidGray)
+		Foreground(colorBorder)
 
 	vFormLabelStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Width(12).
-			Align(lipgloss.Right).
-			Padding(0, 1)
+		Foreground(colorMuted).
+		Width(12).
+		Align(lipgloss.Right).
+		Padding(0, 1)
 
 	vFormInput = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder()).
-			BorderForeground(colorMidGray).
-			Padding(0, 1).
-			Width(40).
-			Foreground(colorLightGray)
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		Padding(0, 1).
+		Width(40).
+		Foreground(colorTextSoft)
 
 	vFormInputFocused = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder()).
-				BorderForeground(colorPink).
-				Padding(0, 1).
-				Width(40).
-				Foreground(colorWhite)
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorAccent).
+		Padding(0, 1).
+		Width(40).
+		Foreground(colorText)
 
 	vFormSaveBtn = lipgloss.NewStyle().
-			Foreground(colorGray).
-			Background(colorMidGray).
-			Padding(0, 2).
-			Margin(1, 0, 0, 13).
-			Bold(true)
+		Foreground(colorTextSoft).
+		Background(colorBorder).
+		Padding(0, 2).
+		Margin(1, 0, 0, 13).
+		Bold(true)
 
 	vFormSaveActive = lipgloss.NewStyle().
-			Foreground(colorBlack).
-			Background(colorPink).
-			Padding(0, 2).
-			Margin(1, 0, 0, 13).
-			Bold(true)
+		Foreground(colorAccentText).
+		Background(colorAccent).
+		Padding(0, 2).
+		Margin(1, 0, 0, 13).
+		Bold(true)
 
 	vLogLineStyle = lipgloss.NewStyle().
-			Foreground(colorLightGray)
+		Foreground(colorTextSoft)
 
-	// Dialog styles
 	vDialogTitleStyle = lipgloss.NewStyle().
-				Foreground(colorPink).
-				Bold(true).
-				Padding(0, 1)
+		Foreground(colorAccent).
+		Bold(true).
+		Padding(0, 1)
 
 	vDialogHelpStyle = lipgloss.NewStyle().
-				Foreground(colorGray).
-				Padding(1, 0)
+		Foreground(colorMuted).
+		Padding(1, 0)
 
 	dialogCard = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorPink).
-			Padding(1, 3).
-			Background(colorBlack).
-			Width(70)
-)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorAccent).
+		Padding(1, 3).
+		Background(colorBg).
+		Width(70)
+}
+
+func resolveThemeMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = strings.ToLower(strings.TrimSpace(os.Getenv("TREEHOLE_THEME")))
+	}
+
+	switch mode {
+	case "light", "dark":
+		return mode
+	default:
+		return "auto"
+	}
+}
+
+func paletteForTheme(mode string) themePalette {
+	if shouldUseDarkTheme(mode) {
+		return themePalette{
+			bg:           lipgloss.Color("#000000"),
+			surface:      lipgloss.Color("#1A1A1A"),
+			border:       lipgloss.Color("#4A4A4A"),
+			muted:        lipgloss.Color("#888888"),
+			textSoft:     lipgloss.Color("#B0B0B0"),
+			text:         lipgloss.Color("#FFFFFF"),
+			accent:       lipgloss.Color("#FF69B4"),
+			accentStrong: lipgloss.Color("#CC5588"),
+			accentSoft:   lipgloss.Color("#2A1520"),
+			accentText:   lipgloss.Color("#000000"),
+			link:         lipgloss.Color("#87CEEB"),
+			success:      lipgloss.Color("#90EE90"),
+			warning:      lipgloss.Color("#FFA500"),
+		}
+	}
+
+	return themePalette{
+		bg:           lipgloss.Color("#FFF9F2"),
+		surface:      lipgloss.Color("#F2EAE3"),
+		border:       lipgloss.Color("#C8B7AE"),
+		muted:        lipgloss.Color("#7F6A63"),
+		textSoft:     lipgloss.Color("#5E4741"),
+		text:         lipgloss.Color("#241916"),
+		accent:       lipgloss.Color("#CC4C8A"),
+		accentStrong: lipgloss.Color("#A63A6E"),
+		accentSoft:   lipgloss.Color("#F4DCE7"),
+		accentText:   lipgloss.Color("#FFF9F2"),
+		link:         lipgloss.Color("#2E6F9E"),
+		success:      lipgloss.Color("#2F7D57"),
+		warning:      lipgloss.Color("#A65A00"),
+	}
+}
+
+func shouldUseDarkTheme(mode string) bool {
+	switch mode {
+	case "dark":
+		return true
+	case "light":
+		return false
+	default:
+		return lipgloss.HasDarkBackground()
+	}
+}

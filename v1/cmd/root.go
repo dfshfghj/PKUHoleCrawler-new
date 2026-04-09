@@ -38,6 +38,7 @@ var (
 	commentsPerPost int
 	fetchImages     bool
 	convertWebp     bool
+	tuiCaptureDir   string
 )
 
 func NewRootCmd() *cobra.Command {
@@ -51,6 +52,7 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db-path", "./treehole.db", "database file path")
+	rootCmd.PersistentFlags().StringVar(&tuiCaptureDir, "tui-capture-dir", "", "write TUI raw ANSI output and latest frame snapshots to this directory")
 
 	rootCmd.AddCommand(newServerCmd())
 	rootCmd.AddCommand(newCrawlerCmd())
@@ -91,7 +93,19 @@ func runTUI() error {
 	}
 
 	model := tui.NewModel(database, client, cfg)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+
+	capture, err := tui.NewCaptureSink(tuiCaptureDir)
+	if err != nil {
+		return fmt.Errorf("初始化TUI捕获失败: %w", err)
+	}
+	if capture != nil {
+		defer capture.Close()
+		model.Capture = capture
+		opts = append(opts, tea.WithOutput(capture.OutputWriter(os.Stdout)))
+	}
+
+	p := tea.NewProgram(model, opts...)
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI运行错误: %w", err)
@@ -116,15 +130,7 @@ func runDaemon() error {
 	}
 
 	if resume {
-		count, err := database.GetPostCount()
-		if err != nil {
-			log.Printf("[Daemon] 无法获取帖子计数: %v", err)
-			return fmt.Errorf("获取帖子计数失败: %w", err)
-		}
-		if count > 0 {
-			startPage = (count / 100) + 1
-			log.Printf("[Daemon] 断点续爬模式: 从第 %d 页开始 (已有 %d 条帖子)", startPage, count)
-		}
+		log.Printf("[Daemon] 断点续爬模式已启用，但未保存断点页码；将从配置的第 %d 页开始", startPage)
 	}
 
 	monitorMode := loopPages > 0
@@ -194,10 +200,8 @@ func runDaemon() error {
 			totalComments += result.CommentCount
 			crawled++
 
-			pc, _ := database.GetPostCount()
-			cc, _ := database.GetCommentCount()
-			log.Printf("[Daemon] 第 %d 页完成: +%d帖子 +%d评论 | 总计: %d帖子 %d评论",
-				page, result.PostCount, result.CommentCount, pc, cc)
+			log.Printf("[Daemon] 第 %d 页完成: +%d帖子 +%d评论",
+				page, result.PostCount, result.CommentCount)
 
 			page++
 

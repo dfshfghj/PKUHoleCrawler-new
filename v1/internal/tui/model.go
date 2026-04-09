@@ -8,7 +8,6 @@ import (
 	"treehole/internal/db"
 	"treehole/internal/models"
 
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -36,12 +35,34 @@ const (
 	CrawlerError
 )
 
+type HomeFocus int
+
+const (
+	HomeFocusStart HomeFocus = iota
+	HomeFocusStop
+	HomeFocusMode
+)
+
+type PostsMode int
+
+const (
+	PostsModeList PostsMode = iota
+	PostsModeSearchInput
+	PostsModeSearchResults
+	PostsModeDetail
+)
+
+type DetailFocus int
+
+const (
+	DetailFocusPost DetailFocus = iota
+	DetailFocusComments
+)
+
 type CrawlMsg struct {
-	PostsCount    int
-	CommentsCount int
-	Page          int
-	Duration      time.Duration
-	Error         error
+	Page     int
+	Duration time.Duration
+	Error    error
 }
 
 type TickMsg time.Time
@@ -52,28 +73,25 @@ type LoginMsg struct {
 }
 
 type LoadPostsMsg struct {
-	Posts []models.Post
-	Total int
-	Page  int
-	Error error
+	Posts   []models.Post
+	Cursor  int
+	HasMore bool
+	Error   error
 }
 
 type LoadCommentsMsg struct {
 	Comments []models.Comment
+	Cursor   int32
+	HasMore  bool
+	SortAsc  bool
 	Error    error
 }
 
 type SearchPostsMsg struct {
-	Posts []models.Post
-	Total int
-	Page  int
-	Error error
-}
-
-type LoadStatsMsg struct {
-	PostCount    int
-	CommentCount int
-	Error        error
+	Posts   []models.Post
+	Cursor  int
+	HasMore bool
+	Error   error
 }
 
 type LoadLogsMsg struct {
@@ -105,80 +123,34 @@ type Model struct {
 
 	Dialog DialogType
 
-	LoggedIn     bool
-	LoginUser    string
-	CrawlerState CrawlerState
-	CrawlerStart time.Time
-	CrawlMode    CrawlMode
-	MonitorPages int
-	Database     *db.Database
-	Client       *client.Client
-	Config       *config.Config
+	Home     HomePageModel
+	Database *db.Database
+	Client   *client.Client
+	Config   *config.Config
 
-	TotalPosts    int
-	TotalComments int
-	LastCrawlPage int
-	LastCrawlTime time.Duration
+	Posts PostsPageModel
 
-	HomeButtonIdx int
-	HomeLastError string
-
-	PostList        []models.Post
-	PostListTotal   int
-	PostListLoading bool
-	PostListError   string
-	PostPerPage     int
-	PostViewport    *viewport.Model
-	postContent     string
-	SelectedPostIdx int
-
-	ShowPostDetail  bool
-	CurrentPost     *models.Post
-	CommentList     []models.Comment
-	CommentViewport *viewport.Model
-	commentContent  string
-
-	Searching      bool
-	SearchInput    string
-	SearchActive   bool
-	SearchResults  []models.Post
-	SearchTotal    int
-	SearchViewport *viewport.Model
-
-	ConfigUsername  string
-	ConfigPassword  string
-	ConfigSecretKey string
-	ConfigFieldIdx  int
-	ConfigSaving    bool
-	ConfigSaveOK    bool
-
-	LogLines   []string
-	LogOffset  int
-	LogLoading bool
+	ConfigDialog ConfigDialogModel
+	LogsDialog   LogsDialogModel
 
 	LastError string
+	Capture   *CaptureSink
 }
 
 func NewModel(database *db.Database, client *client.Client, cfg *config.Config) Model {
-	pv := viewport.New(0, 0)
-	cv := viewport.New(0, 0)
+	applyTheme("")
+
 	return Model{
-		Page:            PagePosts,
-		TabCursor:       1,
-		Dialog:          DialogNone,
-		Database:        database,
-		Client:          client,
-		Config:          cfg,
-		CrawlerState:    CrawlerStopped,
-		CrawlMode:       CrawlSequential,
-		MonitorPages:    3,
-		PostPerPage:     20,
-		PostViewport:    &pv,
-		CommentViewport: &cv,
-		ConfigUsername:  cfg.Username,
-		ConfigPassword:  cfg.Password,
-		ConfigSecretKey: cfg.SecretKey,
-		LogOffset:       0,
+		Page:         PagePosts,
+		TabCursor:    1,
+		Dialog:       DialogNone,
+		Home:         NewHomePageModel(),
+		Database:     database,
+		Client:       client,
+		Config:       cfg,
+		Posts:        NewPostsPageModel(),
+		ConfigDialog: NewConfigDialog(cfg),
+		LogsDialog:   NewLogsDialog(),
 	}
 }
 
@@ -187,19 +159,7 @@ func (m Model) Init() tea.Cmd {
 		func() tea.Msg {
 			return LoginMsg{Username: m.Config.Username}
 		},
-		func() tea.Msg {
-			pc, _ := m.Database.GetPostCount()
-			cc, _ := m.Database.GetCommentCount()
-			return LoadStatsMsg{PostCount: pc, CommentCount: cc}
-		},
-		func() tea.Msg {
-			posts, err := m.Database.GetPosts(0, m.PostPerPage)
-			if err != nil {
-				return LoadPostsMsg{Error: err}
-			}
-			total, _ := m.Database.GetPostCount()
-			return LoadPostsMsg{Posts: posts, Total: total, Page: 1}
-		},
+		loadPostsCmd(m.Database, 0, m.Posts.PostPerPage),
 		tickCmd(),
 	)
 }
@@ -208,4 +168,18 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+func (m *Model) ensureDialogModels() {
+	if !m.ConfigDialog.initialized() {
+		m.ConfigDialog = NewConfigDialog(m.Config)
+	}
+	if !m.LogsDialog.initialized() {
+		m.LogsDialog = NewLogsDialog()
+	}
+	m.Posts.ensureInitialized()
+}
+
+func (m Model) calcPostViewportHeight() int {
+	return m.Posts.calcPostViewportHeight(m.Height)
 }

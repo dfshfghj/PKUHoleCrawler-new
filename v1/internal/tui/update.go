@@ -5,23 +5,26 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"treehole/internal/client"
 	"treehole/internal/config"
 	"treehole/internal/crawler"
 	"treehole/internal/db"
+	"treehole/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pquerna/otp/totp"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m.ensureDialogModels()
+
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.Width = msg.Width
 		m.Height = msg.Height
+		m.syncPostsPage()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -33,49 +36,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LoginMsg:
 		if msg.Error != nil {
 			m.LastError = msg.Error.Error()
-			m.LoggedIn = false
+			m.Home.LoggedIn = false
 		} else {
-			m.LoggedIn = true
-			m.LoginUser = msg.Username
-		}
-		return m, nil
-
-	case LoadStatsMsg:
-		if msg.Error == nil {
-			m.TotalPosts = msg.PostCount
-			m.TotalComments = msg.CommentCount
+			m.Home.LoggedIn = true
+			m.Home.LoginUser = msg.Username
 		}
 		return m, nil
 
 	case CrawlMsg:
 		if msg.Error != nil {
 			log.Printf("[Crawler] 爬虫错误: 第 %d 页, %v", msg.Page, msg.Error)
-			m.CrawlerState = CrawlerError
-			m.HomeLastError = msg.Error.Error()
+			m.Home.CrawlerState = CrawlerError
+			m.Home.HomeLastError = msg.Error.Error()
 		} else {
-			m.LastCrawlPage = msg.Page
-			m.LastCrawlTime = msg.Duration
-			m.TotalPosts = msg.PostsCount
-			m.TotalComments = msg.CommentsCount
-			if m.CrawlerState == CrawlerRunning {
-				if m.CrawlMode == CrawlMonitor {
-					return m, tea.Batch(
-						crawlMonitorCmd(m.Client, m.Database, m.MonitorPages),
-						func() tea.Msg {
-							pc, _ := m.Database.GetPostCount()
-							cc, _ := m.Database.GetCommentCount()
-							return LoadStatsMsg{PostCount: pc, CommentCount: cc}
-						},
-					)
+			m.Home.LastCrawlPage = msg.Page
+			m.Home.LastCrawlTime = msg.Duration
+			if m.Home.CrawlerState == CrawlerRunning {
+				if m.Home.CrawlMode == CrawlMonitor {
+					return m, crawlMonitorCmd(m.Client, m.Database, m.Home.MonitorPages)
 				}
-				return m, tea.Batch(
-					crawlPageCmd(m.Client, m.Database, msg.Page+1, 3),
-					func() tea.Msg {
-						pc, _ := m.Database.GetPostCount()
-						cc, _ := m.Database.GetCommentCount()
-						return LoadStatsMsg{PostCount: pc, CommentCount: cc}
-					},
-				)
+				return m, crawlPageCmd(m.Client, m.Database, msg.Page+1)
 			} else {
 				log.Printf("[Crawler] 爬虫已停止，最终抓取到第 %d 页", msg.Page)
 			}
@@ -83,74 +63,98 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case LoadPostsMsg:
-		m.PostListLoading = false
+		m.Posts.PostListLoading = false
 		if msg.Error != nil {
 			log.Printf("[Posts] 加载帖子列表失败: %v", msg.Error)
-			m.PostListError = msg.Error.Error()
+			m.Posts.PostListError = msg.Error.Error()
 		} else {
-			log.Printf("[Posts] 加载 %d 条帖子, 总计 %d 条", len(msg.Posts), msg.Total)
-			if !m.SearchActive {
-				m.PostList = append(m.PostList, msg.Posts...)
+			log.Printf("[Posts] 加载 %d 条帖子", len(msg.Posts))
+			m.Posts.PostListError = ""
+			if !m.Posts.SearchActive {
+				if msg.Cursor == 0 {
+					m.Posts.PostList = msg.Posts
+					m.Posts.SelectedPostIdx = 0
+					m.Posts.CursorLine = 0
+					m.Posts.PostViewport.GotoTop()
+				} else {
+					m.Posts.PostList = append(m.Posts.PostList, msg.Posts...)
+				}
+				m.Posts.PostsMode = PostsModeList
 			}
-			m.PostListTotal = msg.Total
-			m.postContent = ""
+			m.Posts.PostListTotal = len(m.Posts.PostList)
+			m.Posts.PostListCursor = nextPostCursor(msg.Posts)
+			m.Posts.PostListHasMore = msg.HasMore
 		}
+		m.syncPostsPage()
 		return m, nil
 
 	case LoadCommentsMsg:
+		m.Posts.CommentListLoading = false
 		if msg.Error != nil {
 			log.Printf("[Posts] 加载评论失败: %v", msg.Error)
-			m.PostListError = msg.Error.Error()
+			m.Posts.CommentListError = msg.Error.Error()
 		} else {
 			log.Printf("[Posts] 加载 %d 条评论", len(msg.Comments))
-			m.CommentList = msg.Comments
+			m.Posts.CommentListError = ""
+			if msg.Cursor == 0 {
+				m.Posts.CommentList = msg.Comments
+				m.Posts.CommentViewport.GotoTop()
+			} else {
+				m.Posts.CommentList = append(m.Posts.CommentList, msg.Comments...)
+			}
+			m.Posts.CommentListCursor = nextCommentCursor(msg.Comments)
+			m.Posts.CommentListHasMore = msg.HasMore
+			m.Posts.CommentSortAsc = msg.SortAsc
 		}
+		m.syncPostsPage()
 		return m, nil
 
 	case SearchPostsMsg:
-		m.PostListLoading = false
+		m.Posts.PostListLoading = false
 		if msg.Error != nil {
-			m.PostListError = msg.Error.Error()
+			m.Posts.PostListError = msg.Error.Error()
 		} else {
-			if m.SearchActive {
-				m.PostList = append(m.PostList, msg.Posts...)
-			} else {
-				m.PostList = msg.Posts
-				m.SelectedPostIdx = 0
-				m.PostViewport.GotoTop()
+			log.Printf("[Posts] 搜索加载 %d 条帖子", len(msg.Posts))
+			m.Posts.PostListError = ""
+			if msg.Cursor == 0 {
+				m.Posts.PostList = msg.Posts
+				m.Posts.SelectedPostIdx = 0
+				m.Posts.CursorLine = 0
+				m.Posts.PostViewport.GotoTop()
+			} else if m.Posts.SearchActive {
+				m.Posts.PostList = append(m.Posts.PostList, msg.Posts...)
 			}
-			m.PostListTotal = msg.Total
-			m.SearchActive = true
-			m.Searching = false
-			m.postContent = ""
+			m.Posts.PostListTotal = len(m.Posts.PostList)
+			m.Posts.PostListCursor = nextPostCursor(msg.Posts)
+			m.Posts.PostListHasMore = msg.HasMore
+			m.Posts.SearchActive = true
+			m.Posts.Searching = false
+			m.Posts.PostsMode = PostsModeSearchResults
 		}
+		m.syncPostsPage()
 		return m, nil
 
 	case LoadLogsMsg:
-		m.LogLoading = false
 		if msg.Error != nil {
-			m.LastError = msg.Error.Error()
+			m.LogsDialog.SetError(msg.Error)
 		} else {
-			m.LogLines = msg.Lines
+			m.LogsDialog.SetLines(msg.Lines)
 		}
 		return m, nil
 
 	case LoadConfigMsg:
 		if msg.Error == nil && msg.Config != nil {
 			m.Config = msg.Config
-			m.ConfigUsername = msg.Config.Username
-			m.ConfigPassword = msg.Config.Password
-			m.ConfigSecretKey = msg.Config.SecretKey
-			m.ConfigFieldIdx = 0
+			m.ConfigDialog.SetConfig(msg.Config)
 		}
 		return m, nil
 
 	case SaveConfigMsg:
-		m.ConfigSaving = false
 		if msg.Error != nil {
 			m.LastError = msg.Error.Error()
+			m.ConfigDialog.SetSaveResult(msg.Error)
 		} else {
-			m.ConfigSaveOK = true
+			m.ConfigDialog.SetSaveResult(nil)
 		}
 		return m, nil
 	}
@@ -165,21 +169,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.String() == "q" && m.Dialog == DialogNone && !m.Searching && m.ConfigFieldIdx < 3 {
+	if msg.String() == "q" && m.Dialog == DialogNone && !m.Posts.Searching {
 		return m, tea.Quit
 	}
 
 	// Open dialogs
-	if m.Dialog == DialogNone && !m.Searching && !m.ShowPostDetail && m.ConfigFieldIdx < 3 {
+	if m.Dialog == DialogNone && !m.Posts.Searching && !m.Posts.ShowPostDetail {
 		if msg.String() == "c" {
 			m.Dialog = DialogConfig
-			m.ConfigFieldIdx = 0
-			m.ConfigSaveOK = false
+			m.ConfigDialog = NewConfigDialog(m.Config)
 			return m, loadConfigCmd()
 		}
 		if msg.String() == "l" {
 			m.Dialog = DialogLogs
-			m.LogLoading = true
+			m.LogsDialog.SetLoading(true)
 			return m, loadLogsCmd()
 		}
 		if msg.String() == "h" {
@@ -188,13 +191,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	}
 
-	if msg.String() == "tab" && m.Dialog == DialogNone && !m.Searching && !m.ShowPostDetail {
+	if msg.String() == "tab" && m.Dialog == DialogNone && !m.Posts.Searching && !m.Posts.ShowPostDetail {
 		m.TabCursor = (m.TabCursor + 1) % 2
 		m.Page = Page(m.TabCursor)
-		if m.Page == PagePosts && len(m.PostList) == 0 {
-			m.PostListLoading = true
-			return m, loadPostsCmd(m.Database, 0, m.PostPerPage)
+		if m.Page == PagePosts && len(m.Posts.PostList) == 0 {
+			m.Posts.PostListLoading = true
+			return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
 		}
+		m.syncPostsPage()
 		return m, nil
 	}
 
@@ -222,323 +226,222 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 }
 
 func (m Model) handleHomeKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	switch msg.String() {
-	case "m":
-		if m.CrawlerState == CrawlerStopped {
-			if m.CrawlMode == CrawlSequential {
-				m.CrawlMode = CrawlMonitor
-			} else {
-				m.CrawlMode = CrawlSequential
-			}
+	action := m.Home.Update(msg)
+	switch action {
+	case HomeActionStartCrawler:
+		log.Printf("[Crawler] 爬虫已启动, 模式: %v", m.Home.CrawlMode)
+		if m.Home.CrawlMode == CrawlMonitor {
+			return m, crawlMonitorCmd(m.Client, m.Database, m.Home.MonitorPages)
 		}
-	case "left":
-		if m.HomeButtonIdx > 0 {
-			m.HomeButtonIdx--
-		}
-	case "right":
-		if m.HomeButtonIdx < 2 {
-			m.HomeButtonIdx++
-		}
-	case "enter":
-		if m.HomeButtonIdx == 0 && m.CrawlerState == CrawlerStopped {
-			m.CrawlerState = CrawlerRunning
-			m.CrawlerStart = time.Now()
-			m.HomeLastError = ""
-			log.Printf("[Crawler] 爬虫已启动, 模式: %v", m.CrawlMode)
-			if m.CrawlMode == CrawlMonitor {
-				return m, tea.Batch(
-					crawlMonitorCmd(m.Client, m.Database, m.MonitorPages),
-					func() tea.Msg {
-						pc, _ := m.Database.GetPostCount()
-						cc, _ := m.Database.GetCommentCount()
-						return LoadStatsMsg{PostCount: pc, CommentCount: cc}
-					},
-				)
-			}
-			return m, tea.Batch(
-				crawlPageCmd(m.Client, m.Database, 1, 3),
-				func() tea.Msg {
-					pc, _ := m.Database.GetPostCount()
-					cc, _ := m.Database.GetCommentCount()
-					return LoadStatsMsg{PostCount: pc, CommentCount: cc}
-				},
-			)
-		} else if m.HomeButtonIdx == 1 && m.CrawlerState == CrawlerRunning {
-			m.CrawlerState = CrawlerStopped
-			log.Printf("[Crawler] 爬虫已手动停止")
-		} else if m.HomeButtonIdx == 2 {
-			if m.CrawlMode == CrawlSequential {
-				m.CrawlMode = CrawlMonitor
-			} else {
-				m.CrawlMode = CrawlSequential
-			}
-		}
+		return m, crawlPageCmd(m.Client, m.Database, 1)
+	case HomeActionStopCrawler:
+		log.Printf("[Crawler] 爬虫已手动停止")
 	}
 	return m, nil
 }
 
 func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	if m.Searching {
+	if m.Posts.Searching {
 		switch msg.Type {
 		case tea.KeyEscape:
-			m.Searching = false
-			m.SearchInput = ""
-			m.SearchActive = false
-			m.postContent = ""
-			return m, nil
+			return m.cancelSearchInput()
 		case tea.KeyEnter:
-			if m.SearchInput != "" {
-				m.PostListLoading = true
-				return m, searchPostsCmd(m.Database, m.SearchInput, 0, m.PostPerPage)
+			if m.Posts.SearchInput != "" {
+				m.Posts.PostListLoading = true
+				m.Posts.PostsMode = PostsModeSearchInput
+				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, 0, m.Posts.PostPerPage)
 			}
 			return m, nil
 		case tea.KeyBackspace:
-			if len(m.SearchInput) > 0 {
-				m.SearchInput = m.SearchInput[:len(m.SearchInput)-1]
+			if len(m.Posts.SearchInput) > 0 {
+				m.Posts.SearchInput = m.Posts.SearchInput[:len(m.Posts.SearchInput)-1]
 			}
+			m.syncPostsPage()
 			return m, nil
 		default:
 			if msg.Type == tea.KeyRunes {
-				m.SearchInput += msg.String()
+				m.Posts.SearchInput += msg.String()
 			}
+			m.syncPostsPage()
 			return m, nil
 		}
 	}
 
-	if m.ShowPostDetail {
+	if m.Posts.ShowPostDetail {
 		switch msg.String() {
 		case "esc":
-			m.ShowPostDetail = false
-			m.CurrentPost = nil
-			m.CommentList = nil
+			m.Posts.ShowPostDetail = false
+			m.Posts.CurrentPost = nil
+			m.Posts.postBodyContent = ""
+			m.Posts.resetComments()
+			m.Posts.commentContent = ""
+			m.Posts.PostBodyViewport.GotoTop()
+			m.Posts.DetailFocus = DetailFocusComments
+			if m.Posts.SearchActive {
+				m.Posts.PostsMode = PostsModeSearchResults
+			} else {
+				m.Posts.PostsMode = PostsModeList
+			}
+			m.syncPostsPage()
 			return m, nil
+		case "tab":
+			if m.Posts.DetailFocus == DetailFocusPost {
+				m.Posts.DetailFocus = DetailFocusComments
+			} else {
+				m.Posts.DetailFocus = DetailFocusPost
+			}
+		case "s":
+			if m.Posts.CurrentPost != nil {
+				nextSortAsc := !m.Posts.CommentSortAsc
+				m.Posts.resetComments()
+				m.Posts.CommentListLoading = true
+				return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, nextSortAsc, 0)
+			}
 		case "up":
-			m.CommentViewport.ScrollUp(1)
+			if m.Posts.DetailFocus == DetailFocusPost {
+				m.Posts.PostBodyViewport.ScrollUp(1)
+			} else {
+				m.Posts.CommentViewport.ScrollUp(1)
+			}
 		case "down":
-			m.CommentViewport.ScrollDown(1)
+			if m.Posts.DetailFocus == DetailFocusPost {
+				m.Posts.PostBodyViewport.ScrollDown(1)
+			} else {
+				m.Posts.CommentViewport.ScrollDown(1)
+				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
+					m.Posts.CommentListLoading = true
+					return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
+				}
+			}
 		case "pgup":
-			m.CommentViewport.PageUp()
+			if m.Posts.DetailFocus == DetailFocusPost {
+				m.Posts.PostBodyViewport.PageUp()
+			} else {
+				m.Posts.CommentViewport.PageUp()
+			}
 		case "pgdown":
-			m.CommentViewport.PageDown()
+			if m.Posts.DetailFocus == DetailFocusPost {
+				m.Posts.PostBodyViewport.PageDown()
+			} else {
+				m.Posts.CommentViewport.PageDown()
+				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
+					m.Posts.CommentListLoading = true
+					return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
+				}
+			}
 		}
+		m.syncPostsPage()
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "esc":
-		if m.SearchActive {
-			m.SearchActive = false
-			m.SearchInput = ""
-			m.postContent = ""
-			m.PostListLoading = true
-			m.PostList = nil
-			m.PostListTotal = 0
-			m.SelectedPostIdx = 0
-			m.PostViewport.GotoTop()
-			return m, loadPostsCmd(m.Database, 0, m.PostPerPage)
+		if m.Posts.SearchActive {
+			return m.clearSearchResults()
 		}
 	case "r":
-		if !m.SearchActive {
-			m.PostListLoading = true
-			m.PostList = nil
-			m.PostListTotal = 0
-			m.SelectedPostIdx = 0
-			m.postContent = ""
-			m.PostViewport.GotoTop()
-			return m, loadPostsCmd(m.Database, 0, m.PostPerPage)
+		if !m.Posts.SearchActive {
+			m.Posts.PostListLoading = true
+			m.Posts.resetList()
+			return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
 		}
 		return m, nil
 	case "/":
-		m.Searching = true
-		m.SearchInput = ""
+		m.Posts.Searching = true
+		m.Posts.PostsMode = PostsModeSearchInput
+		m.Posts.SearchInput = ""
 		return m, nil
 	case "up":
-		if m.SelectedPostIdx > 0 {
-			m.SelectedPostIdx--
-			m.scrollToSelectedPost()
-		} else {
-			m.PostViewport.ScrollUp(1)
-		}
+		m.Posts.moveCursor(-1)
 	case "down":
-		if m.SelectedPostIdx < len(m.PostList)-1 {
-			m.SelectedPostIdx++
-			m.scrollToSelectedPost()
-		} else {
-			m.PostViewport.ScrollDown(1)
-			if m.PostViewport.AtBottom() && m.PostListTotal > len(m.PostList) && !m.PostListLoading {
-				m.PostListLoading = true
-				offset := len(m.PostList)
-				if m.SearchActive {
-					return m, searchPostsCmd(m.Database, m.SearchInput, offset, m.PostPerPage)
-				}
-				return m, loadPostsCmd(m.Database, offset, m.PostPerPage)
+		m.Posts.moveCursor(1)
+		if m.Posts.shouldPrefetchMore() {
+			m.Posts.PostListLoading = true
+			if m.Posts.SearchActive {
+				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage)
 			}
+			return m, loadPostsCmd(m.Database, m.Posts.PostListCursor, m.Posts.PostPerPage)
 		}
 	case "enter":
-		if len(m.PostList) > 0 && m.SelectedPostIdx < len(m.PostList) {
-			post := m.PostList[m.SelectedPostIdx]
-			m.ShowPostDetail = true
-			m.CurrentPost = &post
-			return m, loadCommentsCmd(m.Database, post.Pid)
+		if len(m.Posts.PostList) > 0 && m.Posts.SelectedPostIdx < len(m.Posts.PostList) {
+			post := m.Posts.PostList[m.Posts.SelectedPostIdx]
+			m.Posts.ShowPostDetail = true
+			m.Posts.PostsMode = PostsModeDetail
+			m.Posts.CurrentPost = &post
+			m.Posts.resetComments()
+			m.Posts.CommentListLoading = true
+			m.Posts.PostBodyViewport.GotoTop()
+			m.Posts.DetailFocus = DetailFocusComments
+			m.syncPostsPage()
+			return m, loadCommentsCmd(m.Database, post.Pid, true, 0)
 		}
 	case "pgup":
-		m.PostViewport.PageUp()
-		m.adjustSelectedToViewport()
+		m.Posts.pageMove(-1)
 	case "pgdown":
-		m.PostViewport.PageDown()
-		m.adjustSelectedToViewport()
-		if m.PostViewport.AtBottom() && m.PostListTotal > len(m.PostList) && !m.PostListLoading {
-			m.PostListLoading = true
-			offset := len(m.PostList)
-			if m.SearchActive {
-				return m, searchPostsCmd(m.Database, m.SearchInput, offset, m.PostPerPage)
+		m.Posts.pageMove(1)
+		if m.Posts.shouldPrefetchMore() &&
+			m.Posts.PostListHasMore &&
+			!m.Posts.PostListLoading {
+			m.Posts.PostListLoading = true
+			if m.Posts.SearchActive {
+				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage)
 			}
-			return m, loadPostsCmd(m.Database, offset, m.PostPerPage)
+			return m, loadPostsCmd(m.Database, m.Posts.PostListCursor, m.Posts.PostPerPage)
 		}
 	}
+	m.syncPostsPage()
 	return m, nil
 }
 
-func (m *Model) scrollToSelectedPost() {
-	if len(m.PostList) == 0 {
-		return
-	}
-	targetLine := 0
-	for i := 0; i < m.SelectedPostIdx && i < len(m.PostList); i++ {
-		targetLine += 1 + strings.Count(m.PostList[i].Text, "\n") + 2
-	}
-	if targetLine < m.PostViewport.YOffset {
-		m.PostViewport.SetYOffset(targetLine)
+func (m Model) cancelSearchInput() (Model, tea.Cmd) {
+	m.Posts.Searching = false
+	m.Posts.SearchInput = ""
+	if m.Posts.SearchActive {
+		m.Posts.PostsMode = PostsModeSearchResults
 	} else {
-		visibleLines := m.PostViewport.VisibleLineCount()
-		if targetLine >= m.PostViewport.YOffset+visibleLines {
-			m.PostViewport.SetYOffset(targetLine - visibleLines + 3)
-		}
+		m.Posts.PostsMode = PostsModeList
 	}
+	m.syncPostsPage()
+	return m, nil
 }
 
-func (m *Model) adjustSelectedToViewport() {
-	if len(m.PostList) == 0 {
-		return
-	}
-	yOffset := m.PostViewport.YOffset
-	visibleLines := m.PostViewport.VisibleLineCount()
-	lineIdx := 0
-	for i := 0; i < len(m.PostList); i++ {
-		postLines := 1 + strings.Count(m.PostList[i].Text, "\n") + 1
-		if lineIdx+postLines > yOffset && lineIdx < yOffset+visibleLines {
-			m.SelectedPostIdx = i
-			return
-		}
-		lineIdx += postLines
-	}
+func (m Model) clearSearchResults() (Model, tea.Cmd) {
+	m.Posts.SearchActive = false
+	m.Posts.Searching = false
+	m.Posts.SearchInput = ""
+	m.Posts.PostListLoading = true
+	m.Posts.resetList()
+	m.syncPostsPage()
+	return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
+}
+
+func (m *Model) syncPostsPage() {
+	m.Posts.syncViewports(m.Width, m.Height)
 }
 
 func (m Model) handleConfigKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	if m.ConfigFieldIdx < 3 {
-		switch msg.Type {
-		case tea.KeyEscape:
-			m.Dialog = DialogNone
-			return m, nil
-		case tea.KeyEnter:
-			m.ConfigFieldIdx = 3
-			return m, nil
-		case tea.KeyBackspace:
-			switch m.ConfigFieldIdx {
-			case 0:
-				if len(m.ConfigUsername) > 0 {
-					m.ConfigUsername = m.ConfigUsername[:len(m.ConfigUsername)-1]
-				}
-			case 1:
-				if len(m.ConfigPassword) > 0 {
-					m.ConfigPassword = m.ConfigPassword[:len(m.ConfigPassword)-1]
-				}
-			case 2:
-				if len(m.ConfigSecretKey) > 0 {
-					m.ConfigSecretKey = m.ConfigSecretKey[:len(m.ConfigSecretKey)-1]
-				}
-			}
-			return m, nil
-		case tea.KeyUp:
-			if m.ConfigFieldIdx > 0 {
-				m.ConfigFieldIdx--
-			}
-			return m, nil
-		case tea.KeyDown:
-			if m.ConfigFieldIdx < 2 {
-				m.ConfigFieldIdx++
-			}
-			return m, nil
-		default:
-			if msg.Type == tea.KeyRunes {
-				switch m.ConfigFieldIdx {
-				case 0:
-					m.ConfigUsername += msg.String()
-				case 1:
-					m.ConfigPassword += msg.String()
-				case 2:
-					m.ConfigSecretKey += msg.String()
-				}
-			}
-			return m, nil
-		}
+	if msg.Type == tea.KeyEscape {
+		m.Dialog = DialogNone
+		return m, nil
 	}
-
-	if msg.String() == "enter" && m.ConfigFieldIdx == 3 {
-		m.ConfigSaving = true
-		newCfg := &config.Config{
-			Username:  m.ConfigUsername,
-			Password:  m.ConfigPassword,
-			SecretKey: m.ConfigSecretKey,
-		}
-		return m, saveConfigCmd(newCfg)
+	if msg.Type == tea.KeyEnter && m.ConfigDialog.FocusIndex() == configSaveButtonIndex {
+		m.ConfigDialog.SetSaving(true)
+		return m, saveConfigCmd(m.ConfigDialog.ToConfig())
 	}
-
-	switch msg.String() {
-	case "up":
-		if m.ConfigFieldIdx > 0 {
-			m.ConfigFieldIdx--
-		}
-	case "down":
-		if m.ConfigFieldIdx < 3 {
-			m.ConfigFieldIdx++
-		}
-	case "enter":
-		if m.ConfigFieldIdx < 3 {
-			return m, nil
-		}
-	}
-	return m, nil
+	cmd := m.ConfigDialog.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handleLogsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	switch msg.String() {
-	case "up":
-		if m.LogOffset > 0 {
-			m.LogOffset--
-		}
-	case "down":
-		if m.LogOffset < len(m.LogLines)-1 {
-			m.LogOffset++
-		}
-	case "pgup":
-		m.LogOffset -= 20
-		if m.LogOffset < 0 {
-			m.LogOffset = 0
-		}
-	case "pgdown":
-		m.LogOffset += 20
-		if m.LogOffset >= len(m.LogLines) {
-			m.LogOffset = len(m.LogLines) - 1
-		}
-	case "r":
-		m.LogLoading = true
-		return m, loadLogsCmd()
+	if msg.Type == tea.KeyEscape {
+		m.Dialog = DialogNone
+		return m, nil
 	}
-	return m, nil
+	cmd := m.LogsDialog.Update(msg)
+	return m, cmd
 }
 
-func crawlPageCmd(c *client.Client, database *db.Database, page int, endPage int) tea.Cmd {
+func crawlPageCmd(c *client.Client, database *db.Database, page int) tea.Cmd {
 	return func() tea.Msg {
 		log.Printf("[Crawler] 开始抓取第 %d 页", page)
 		startTime := time.Now()
@@ -552,15 +455,9 @@ func crawlPageCmd(c *client.Client, database *db.Database, page int, endPage int
 
 		log.Printf("[Crawler] 第 %d 页抓取完成: %d 条帖子, %d 条评论 (耗时 %v)", page, result.PostCount, result.CommentCount, duration)
 
-		pc, _ := database.GetPostCount()
-		cc, _ := database.GetCommentCount()
-		log.Printf("[Crawler] 数据库总计: %d 条帖子, %d 条评论", pc, cc)
-
 		return CrawlMsg{
-			PostsCount:    pc,
-			CommentsCount: cc,
-			Page:          page,
-			Duration:      duration,
+			Page:     page,
+			Duration: duration,
 		}
 	}
 }
@@ -584,50 +481,74 @@ func crawlMonitorCmd(c *client.Client, database *db.Database, monitorPages int) 
 		}
 
 		duration := time.Since(startTime)
-		pc, _ := database.GetPostCount()
-		cc, _ := database.GetCommentCount()
 
 		return CrawlMsg{
-			PostsCount:    pc,
-			CommentsCount: cc,
-			Page:          monitorPages,
-			Duration:      duration,
+			Page:     monitorPages,
+			Duration: duration,
 		}
 	}
 }
 
-func loadPostsCmd(database *db.Database, offset, limit int) tea.Cmd {
+func loadPostsCmd(database *db.Database, cursor, limit int) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := database.GetPosts(offset, limit)
+		posts, err := database.GetPostsCursor(cursor, limit, false)
 		if err != nil {
 			return LoadPostsMsg{Error: err}
 		}
-		total, _ := database.GetPostCount()
-		page := (offset / limit) + 1
-		return LoadPostsMsg{Posts: posts, Total: total, Page: page}
+		return LoadPostsMsg{
+			Posts:   posts,
+			Cursor:  cursor,
+			HasMore: len(posts) == limit,
+		}
 	}
 }
 
-func loadCommentsCmd(database *db.Database, pid int32) tea.Cmd {
+func loadCommentsCmd(database *db.Database, pid int32, sortAsc bool, cursor ...int32) tea.Cmd {
 	return func() tea.Msg {
-		comments, err := database.GetCommentsByPid(pid)
+		const batchSize = 50
+		begin := int32(0)
+		if len(cursor) > 0 {
+			begin = cursor[0]
+		}
+		comments, err := database.GetCommentsByPidCursor(pid, begin, batchSize, sortAsc)
 		if err != nil {
 			return LoadCommentsMsg{Error: err}
 		}
-		return LoadCommentsMsg{Comments: comments}
+		return LoadCommentsMsg{
+			Comments: comments,
+			Cursor:   begin,
+			HasMore:  len(comments) == batchSize,
+			SortAsc:  sortAsc,
+		}
 	}
 }
 
-func searchPostsCmd(database *db.Database, keyword string, offset, limit int) tea.Cmd {
+func searchPostsCmd(database *db.Database, keyword string, cursor, limit int) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := database.SearchPosts(keyword, offset, limit)
+		posts, err := database.SearchPostsCursor(keyword, cursor, limit, false)
 		if err != nil {
 			return SearchPostsMsg{Error: err}
 		}
-		total, _ := database.SearchPostsCount(keyword)
-		page := (offset / limit) + 1
-		return SearchPostsMsg{Posts: posts, Total: total, Page: page}
+		return SearchPostsMsg{
+			Posts:   posts,
+			Cursor:  cursor,
+			HasMore: len(posts) == limit,
+		}
 	}
+}
+
+func nextPostCursor(posts []models.Post) int {
+	if len(posts) == 0 {
+		return 0
+	}
+	return int(posts[len(posts)-1].Pid)
+}
+
+func nextCommentCursor(comments []models.Comment) int32 {
+	if len(comments) == 0 {
+		return 0
+	}
+	return comments[len(comments)-1].Cid
 }
 
 func loadLogsCmd() tea.Cmd {

@@ -188,6 +188,38 @@ func TestUpsertComments(t *testing.T) {
 	}
 }
 
+func TestGetCommentsByPidCursorPreloadsQuote(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	seedPosts(t, db, []models.Post{
+		{Pid: 1, Text: "Test Post", Type: "text", Timestamp: 1000},
+	})
+
+	quoteID := int32(1)
+	seedComments(t, db, []models.Comment{
+		{Cid: 1, Pid: 1, Text: "Quoted comment", Timestamp: 1100, NameTag: "user1"},
+		{Cid: 2, Pid: 1, Text: "Reply comment", Timestamp: 1200, NameTag: "user2", QuoteID: &quoteID},
+	})
+
+	fetched, err := db.GetCommentsByPidCursor(1, 0, 100, true)
+	if err != nil {
+		t.Fatalf("GetCommentsByPidCursor: %v", err)
+	}
+	if len(fetched) != 2 {
+		t.Fatalf("GetCommentsByPidCursor got %d comments, want 2", len(fetched))
+	}
+	if fetched[1].Quote == nil {
+		t.Fatal("GetCommentsByPidCursor should preload Quote")
+	}
+	if fetched[1].Quote.NameTag != "user1" {
+		t.Errorf("Quote.NameTag = %q, want %q", fetched[1].Quote.NameTag, "user1")
+	}
+	if fetched[1].Quote.Text != "Quoted comment" {
+		t.Errorf("Quote.Text = %q, want %q", fetched[1].Quote.Text, "Quoted comment")
+	}
+}
+
 func TestUpsertCommentsNullByteSanitize(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -221,7 +253,7 @@ func TestGetPostByPidNotFound(t *testing.T) {
 	}
 }
 
-func TestGetPostsPagination(t *testing.T) {
+func TestGetPostsCursorPagination(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -233,9 +265,9 @@ func TestGetPostsPagination(t *testing.T) {
 	}
 	seedPosts(t, db, posts)
 
-	firstPage, err := db.GetPosts(0, 10)
+	firstPage, err := db.GetPostsCursor(0, 10, false)
 	if err != nil {
-		t.Fatalf("GetPosts(0,10): %v", err)
+		t.Fatalf("GetPostsCursor(0,10,false): %v", err)
 	}
 	if len(firstPage) != 10 {
 		t.Errorf("First page has %d posts, want 10", len(firstPage))
@@ -244,17 +276,19 @@ func TestGetPostsPagination(t *testing.T) {
 		t.Errorf("First post pid = %d, want 25 (DESC order)", firstPage[0].Pid)
 	}
 
-	secondPage, err := db.GetPosts(10, 10)
+	secondCursor := int(firstPage[len(firstPage)-1].Pid)
+	secondPage, err := db.GetPostsCursor(secondCursor, 10, false)
 	if err != nil {
-		t.Fatalf("GetPosts(10,10): %v", err)
+		t.Fatalf("GetPostsCursor(cursor,10,false): %v", err)
 	}
 	if len(secondPage) != 10 {
 		t.Errorf("Second page has %d posts, want 10", len(secondPage))
 	}
 
-	thirdPage, err := db.GetPosts(20, 10)
+	thirdCursor := int(secondPage[len(secondPage)-1].Pid)
+	thirdPage, err := db.GetPostsCursor(thirdCursor, 10, false)
 	if err != nil {
-		t.Fatalf("GetPosts(20,10): %v", err)
+		t.Fatalf("GetPostsCursor(cursor,10,false): %v", err)
 	}
 	if len(thirdPage) != 5 {
 		t.Errorf("Third page has %d posts, want 5", len(thirdPage))
@@ -321,7 +355,7 @@ func TestGetPostsCursorAsc(t *testing.T) {
 	}
 }
 
-func TestSearchPosts(t *testing.T) {
+func TestSearchPostsCursorBasic(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -332,25 +366,17 @@ func TestSearchPosts(t *testing.T) {
 	}
 	seedPosts(t, db, posts)
 
-	results, err := db.SearchPosts("PKU", 0, 10)
+	results, err := db.SearchPostsCursor("PKU", 0, 10, false)
 	if err != nil {
-		t.Fatalf("SearchPosts: %v", err)
+		t.Fatalf("SearchPostsCursor: %v", err)
 	}
 	if len(results) != 2 {
 		t.Errorf("SearchResults = %d, want 2", len(results))
 	}
 
-	count, err := db.SearchPostsCount("PKU")
+	results, err = db.SearchPostsCursor("nonexistent", 0, 10, false)
 	if err != nil {
-		t.Fatalf("SearchPostsCount: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("SearchCount = %d, want 2", count)
-	}
-
-	results, err = db.SearchPosts("nonexistent", 0, 10)
-	if err != nil {
-		t.Fatalf("SearchPosts: %v", err)
+		t.Fatalf("SearchPostsCursor: %v", err)
 	}
 	if len(results) != 0 {
 		t.Errorf("SearchResults for 'nonexistent' = %d, want 0", len(results))

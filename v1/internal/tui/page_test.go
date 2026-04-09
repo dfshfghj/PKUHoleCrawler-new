@@ -13,6 +13,7 @@ import (
 	"treehole/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func projectRoot() string {
@@ -20,17 +21,22 @@ func projectRoot() string {
 	return filepath.Join(filepath.Dir(filename), "../..")
 }
 
-// stripANSI removes all ANSI escape sequences from a string.
+// stripANSI removes ANSI escape sequences from a string.
 func stripANSI(s string) string {
-	re := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-	return re.ReplaceAllString(s, "")
+	return stripANSISequences(s)
+}
+
+// frameLines returns the full stripped frame lines, preserving blank rows.
+func frameLines(output string) []string {
+	stripped := stripANSI(output)
+	stripped = strings.TrimSuffix(stripped, "\n")
+	return strings.Split(stripped, "\n")
 }
 
 // visibleLines returns the non-empty lines from a stripped output string.
 func visibleLines(output string) []string {
-	stripped := stripANSI(output)
 	var lines []string
-	for _, line := range strings.Split(stripped, "\n") {
+	for _, line := range frameLines(output) {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" {
 			lines = append(lines, trimmed)
@@ -64,9 +70,9 @@ func loadRealPosts(t *testing.T) []models.Post {
 	}
 	defer database.Close()
 
-	posts, err := database.GetPosts(0, 50)
+	posts, err := database.GetPostsCursor(0, 50, false)
 	if err != nil {
-		t.Fatalf("GetPosts: %v", err)
+		t.Fatalf("GetPostsCursor: %v", err)
 	}
 
 	if len(posts) == 0 {
@@ -89,8 +95,8 @@ func TestViewPostsRealDataOverflow(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{longest}
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = []models.Post{longest}
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -127,8 +133,8 @@ func TestViewPostsRealDataMultiLine(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{mostLines}
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = []models.Post{mostLines}
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -162,10 +168,10 @@ func TestViewPostsExtremeLongText(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: longLine, Timestamp: 1000, Anonymous: true},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -180,16 +186,76 @@ func TestViewPostsExtremeLongText(t *testing.T) {
 	t.Logf("Output length for 2000-char line: %d", len(output))
 }
 
+func TestBuildPostListContentWrapsToViewportWidth(t *testing.T) {
+	longLine := strings.Repeat("A", 50)
+
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: longLine, Timestamp: 1000, Anonymous: true},
+	}
+	m.Posts.SelectedPostIdx = 0
+	m.Width = 28
+	m.Height = 12
+	m.syncPostsPage()
+
+	contentWidth := m.Posts.currentListContentWidth()
+	content := m.Posts.buildPostListContent(contentWidth)
+	stripped := stripANSI(content)
+
+	if !strings.Contains(stripped, strings.Repeat("A", 16)) {
+		t.Fatal("wrapped content missing expected first chunk")
+	}
+	if strings.Contains(stripped, longLine) {
+		t.Fatal("long line should be split before rendering")
+	}
+
+	lines := strings.Split(strings.TrimRight(stripped, "\n"), "\n")
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > contentWidth {
+			t.Fatalf("rendered line width = %d, want <= %d: %q", w, contentWidth, line)
+		}
+	}
+
+	if got := m.Posts.postRenderedLinesAt(0); got < 5 {
+		t.Fatalf("postRenderedLinesAt(0) = %d, want at least 5 after wrapping", got)
+	}
+}
+
+func TestBuildDetailBodyContentWrapsToInnerWidth(t *testing.T) {
+	longLine := strings.Repeat("B", 50)
+
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: longLine, Timestamp: 1000}
+	m.Posts.DetailFocus = DetailFocusPost
+	m.Width = 28
+	m.Height = 12
+	m.syncPostsPage()
+
+	contentWidth := m.Posts.PostBodyViewport.Width
+	content := m.Posts.buildDetailBodyContent(contentWidth)
+	lines := strings.Split(strings.TrimRight(stripANSI(content), "\n"), "\n")
+	maxWidth := m.Posts.detailBodyTextWidth(contentWidth) + vPostTextStyle.GetHorizontalFrameSize()
+
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > maxWidth {
+			t.Fatalf("detail line width = %d, want <= %d: %q", w, maxWidth, line)
+		}
+	}
+}
+
 func TestViewPostsManyNewlines(t *testing.T) {
 	// Create a post with many newlines (100 empty lines)
 	manyNewlines := strings.Repeat("\n", 100) + "bottom line"
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: manyNewlines, Timestamp: 1000, Anonymous: true},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -211,8 +277,8 @@ func TestViewPostsWideTerminal(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:3]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:3]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 200
 	m.Height = 100 // Very tall to fit all posts even with wrapping
 
@@ -249,8 +315,8 @@ func TestViewPostsNarrowTerminal(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:1]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:1]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 40
 	m.Height = 12
 
@@ -266,10 +332,10 @@ func TestViewPostsNarrowTerminal(t *testing.T) {
 func TestViewPostsTinyTerminal(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "test", Timestamp: 1000},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 10
 	m.Height = 5
 
@@ -295,9 +361,9 @@ func TestViewPostDetailLongText(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &longest
-	m.CommentList = nil
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &longest
+	m.Posts.CommentList = nil
 	m.Width = 80
 	m.Height = 24
 
@@ -330,9 +396,9 @@ func TestViewPostDetailManyComments(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{Pid: 1, Text: "Post with many comments", Timestamp: 1000}
-	m.CommentList = comments
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: "Post with many comments", Timestamp: 1000}
+	m.Posts.CommentList = comments
 	m.Width = 80
 	m.Height = 24
 
@@ -358,8 +424,8 @@ func TestScrollToSelectedPostBoundary(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:10]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:10]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -367,13 +433,13 @@ func TestScrollToSelectedPostBoundary(t *testing.T) {
 	m.View()
 
 	// Scroll to last post
-	m.SelectedPostIdx = 9
-	m.scrollToSelectedPost()
+	m.Posts.SelectedPostIdx = 9
+	m.Posts.scrollToSelectedPost()
 
 	// Should not panic
 	m.View()
 
-	t.Logf("Scrolled to last post, viewport YOffset=%d", m.PostViewport.YOffset)
+	t.Logf("Scrolled to last post, viewport YOffset=%d", m.Posts.PostViewport.YOffset)
 }
 
 func TestAdjustSelectedToViewportBoundary(t *testing.T) {
@@ -384,8 +450,8 @@ func TestAdjustSelectedToViewportBoundary(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:10]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:10]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -393,11 +459,11 @@ func TestAdjustSelectedToViewportBoundary(t *testing.T) {
 	m.View()
 
 	// Simulate viewport scrolled to bottom
-	m.PostViewport.GotoBottom()
-	m.adjustSelectedToViewport()
+	m.Posts.PostViewport.GotoBottom()
+	m.Posts.adjustSelectedToViewport()
 
 	// SelectedPostIdx should be updated to match viewport
-	t.Logf("After GotoBottom + adjustSelectedToViewport: SelectedPostIdx=%d", m.SelectedPostIdx)
+	t.Logf("After GotoBottom + adjustSelectedToViewport: SelectedPostIdx=%d", m.Posts.SelectedPostIdx)
 }
 
 func TestFastScrollPgDownBoundary(t *testing.T) {
@@ -408,9 +474,8 @@ func TestFastScrollPgDownBoundary(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:20]
-	m.SelectedPostIdx = 0
-	m.PostListTotal = 100 // Simulate more posts available
+	m.Posts.PostList = posts[:20]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -428,7 +493,7 @@ func TestFastScrollPgDownBoundary(t *testing.T) {
 		t.Fatal("View() returned empty after rapid PgDn")
 	}
 
-	t.Logf("After 20x PgDn: SelectedPostIdx=%d, YOffset=%d", m.SelectedPostIdx, m.PostViewport.YOffset)
+	t.Logf("After 20x PgDn: SelectedPostIdx=%d, YOffset=%d", m.Posts.SelectedPostIdx, m.Posts.PostViewport.YOffset)
 }
 
 func TestFastScrollPgUpBoundary(t *testing.T) {
@@ -439,9 +504,8 @@ func TestFastScrollPgUpBoundary(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:20]
-	m.SelectedPostIdx = 19
-	m.PostListTotal = 100
+	m.Posts.PostList = posts[:20]
+	m.Posts.SelectedPostIdx = 19
 	m.Width = 80
 	m.Height = 24
 
@@ -460,11 +524,11 @@ func TestFastScrollPgUpBoundary(t *testing.T) {
 	}
 
 	// Should be at or near top
-	if m.SelectedPostIdx > 2 {
-		t.Errorf("SelectedPostIdx = %d, expected near 0 after 20x PgUp", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx > 2 {
+		t.Errorf("SelectedPostIdx = %d, expected near 0 after 20x PgUp", m.Posts.SelectedPostIdx)
 	}
 
-	t.Logf("After 20x PgUp: SelectedPostIdx=%d, YOffset=%d", m.SelectedPostIdx, m.PostViewport.YOffset)
+	t.Logf("After 20x PgUp: SelectedPostIdx=%d, YOffset=%d", m.Posts.SelectedPostIdx, m.Posts.PostViewport.YOffset)
 }
 
 func TestFastScrollMixedBoundary(t *testing.T) {
@@ -475,9 +539,8 @@ func TestFastScrollMixedBoundary(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:20]
-	m.SelectedPostIdx = 0
-	m.PostListTotal = 100
+	m.Posts.PostList = posts[:20]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -505,11 +568,44 @@ func TestFastScrollMixedBoundary(t *testing.T) {
 	}
 
 	// After 30x PgUp from bottom, should be at top
-	if m.SelectedPostIdx > 3 {
-		t.Errorf("SelectedPostIdx = %d, expected near 0 after mixed scroll ending with PgUp", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx > 3 {
+		t.Errorf("SelectedPostIdx = %d, expected near 0 after mixed scroll ending with PgUp", m.Posts.SelectedPostIdx)
 	}
 
-	t.Logf("After mixed scroll: SelectedPostIdx=%d, YOffset=%d", m.SelectedPostIdx, m.PostViewport.YOffset)
+	t.Logf("After mixed scroll: SelectedPostIdx=%d, YOffset=%d", m.Posts.SelectedPostIdx, m.Posts.PostViewport.YOffset)
+}
+
+func TestFastScrollKeepsCursorVisible(t *testing.T) {
+	posts := loadRealPosts(t)
+	if len(posts) < 20 {
+		t.Skip("need at least 20 posts")
+	}
+
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = posts[:20]
+	m.Width = 80
+	m.Height = 24
+
+	m.View()
+
+	for i := 0; i < 8; i++ {
+		m, _ = m.handlePostsKey(keyPgDown())
+		top := m.Posts.PostViewport.YOffset
+		bottom := top + m.Posts.PostViewport.VisibleLineCount() - 1
+		if m.Posts.CursorLine < top || m.Posts.CursorLine > bottom {
+			t.Fatalf("cursor outside viewport after PgDn: cursor=%d viewport=[%d,%d]", m.Posts.CursorLine, top, bottom)
+		}
+	}
+
+	for i := 0; i < 8; i++ {
+		m, _ = m.handlePostsKey(keyPgUp())
+		top := m.Posts.PostViewport.YOffset
+		bottom := top + m.Posts.PostViewport.VisibleLineCount() - 1
+		if m.Posts.CursorLine < top || m.Posts.CursorLine > bottom {
+			t.Fatalf("cursor outside viewport after PgUp: cursor=%d viewport=[%d,%d]", m.Posts.CursorLine, top, bottom)
+		}
+	}
 }
 
 func TestRefreshClearsState(t *testing.T) {
@@ -520,10 +616,9 @@ func TestRefreshClearsState(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:5]
-	m.PostListTotal = 50
-	m.SelectedPostIdx = 3
-	m.SearchActive = false
+	m.Posts.PostList = posts[:5]
+	m.Posts.SelectedPostIdx = 3
+	m.Posts.SearchActive = false
 	m.Width = 80
 	m.Height = 24
 
@@ -533,17 +628,14 @@ func TestRefreshClearsState(t *testing.T) {
 	// Press 'r' to refresh
 	m, _ = m.handlePostsKey(keyR())
 
-	if !m.PostListLoading {
+	if !m.Posts.PostListLoading {
 		t.Error("PostListLoading should be true after refresh")
 	}
-	if len(m.PostList) != 0 {
-		t.Errorf("PostList should be empty after refresh, got %d", len(m.PostList))
+	if len(m.Posts.PostList) != 0 {
+		t.Errorf("PostList should be empty after refresh, got %d", len(m.Posts.PostList))
 	}
-	if m.PostListTotal != 0 {
-		t.Errorf("PostListTotal should be 0 after refresh, got %d", m.PostListTotal)
-	}
-	if m.SelectedPostIdx != 0 {
-		t.Errorf("SelectedPostIdx should be 0 after refresh, got %d", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx != 0 {
+		t.Errorf("SelectedPostIdx should be 0 after refresh, got %d", m.Posts.SelectedPostIdx)
 	}
 
 	// View during loading should show "加载中..."
@@ -556,20 +648,20 @@ func TestRefreshClearsState(t *testing.T) {
 func TestRefreshDuringSearch(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.SearchActive = true
-	m.SearchInput = "test"
-	m.PostList = []models.Post{{Pid: 1, Text: "test result", Timestamp: 1000}}
+	m.Posts.SearchActive = true
+	m.Posts.SearchInput = "test"
+	m.Posts.PostList = []models.Post{{Pid: 1, Text: "test result", Timestamp: 1000}}
 
 	// Press 'r' during search - should NOT trigger refresh
 	m, cmd := m.handlePostsKey(keyR())
 
-	if m.PostListLoading {
+	if m.Posts.PostListLoading {
 		t.Error("PostListLoading should NOT change during search")
 	}
 	if cmd != nil {
 		t.Error("r during search should NOT trigger reload")
 	}
-	if len(m.PostList) != 1 {
+	if len(m.Posts.PostList) != 1 {
 		t.Error("PostList should NOT be cleared during search")
 	}
 }
@@ -577,7 +669,7 @@ func TestRefreshDuringSearch(t *testing.T) {
 func TestViewPostsErrorState(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostListError = "connection refused"
+	m.Posts.PostListError = "connection refused"
 	m.Width = 80
 	m.Height = 24
 
@@ -591,15 +683,34 @@ func TestViewPostsErrorState(t *testing.T) {
 	}
 }
 
+func TestViewPostsLoadingMoreKeepsContentVisible(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: "hello world", Timestamp: 1000},
+	}
+	m.Posts.PostListLoading = true
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "hello world") {
+		t.Error("View() should keep existing post content visible while loading more")
+	}
+	if !containsStr(output, "正在加载更多") {
+		t.Error("View() should show incremental loading hint while loading more")
+	}
+}
+
 func TestViewPostsErrorWithPartialData(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Partial data", Timestamp: 1000},
 	}
-	m.PostListError = "timeout on page 2"
-	m.PostListTotal = 50
-	m.SelectedPostIdx = 0
+	m.Posts.PostListError = "timeout on page 2"
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -617,12 +728,10 @@ func TestViewPostsErrorWithPartialData(t *testing.T) {
 func TestViewHomeExtremeStats(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.LoggedIn = true
-	m.LoginUser = "testuser"
-	m.CrawlerState = CrawlerRunning
-	m.TotalPosts = 9999999
-	m.TotalComments = 99999999
-	m.LastCrawlPage = 99999
+	m.Home.LoggedIn = true
+	m.Home.LoginUser = "testuser"
+	m.Home.CrawlerState = CrawlerRunning
+	m.Home.LastCrawlPage = 99999
 	m.Width = 80
 	m.Height = 24
 
@@ -639,9 +748,9 @@ func TestViewHomeExtremeStats(t *testing.T) {
 func TestViewPostDetailEmptyPost(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{Pid: 1, Text: "", Timestamp: 1000}
-	m.CommentList = nil
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: "", Timestamp: 1000}
+	m.Posts.CommentList = nil
 	m.Width = 80
 	m.Height = 24
 
@@ -661,9 +770,9 @@ func TestViewPostDetailUnicodeContent(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{Pid: 1, Text: unicodeText, Timestamp: 1000}
-	m.CommentList = []models.Comment{
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: unicodeText, Timestamp: 1000}
+	m.Posts.CommentList = []models.Comment{
 		{Cid: 1, Text: "评论测试 🎊", Timestamp: 1100, NameTag: "用户"},
 	}
 	m.Width = 80
@@ -687,9 +796,8 @@ func TestViewPostsManyPosts(t *testing.T) {
 	// Load all available posts
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts
-	m.PostListTotal = len(posts)
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -710,9 +818,8 @@ func TestViewPostsScrollThroughAll(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts
-	m.PostListTotal = len(posts)
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -720,12 +827,15 @@ func TestViewPostsScrollThroughAll(t *testing.T) {
 	m.View()
 
 	// Scroll through all posts
-	for i := 0; i < len(posts)-1; i++ {
+	for i := 0; i < len(posts)*20 && m.Posts.SelectedPostIdx < len(posts)-1; i++ {
 		m, _ = m.handlePostsKey(keyDown())
 	}
 
-	if m.SelectedPostIdx != len(posts)-1 {
-		t.Errorf("SelectedPostIdx = %d, want %d", m.SelectedPostIdx, len(posts)-1)
+	if m.Posts.SelectedPostIdx != len(posts)-1 {
+		t.Errorf("SelectedPostIdx = %d, want %d", m.Posts.SelectedPostIdx, len(posts)-1)
+	}
+	if m.Posts.PostViewport.YOffset < 0 {
+		t.Errorf("YOffset = %d, should not be negative", m.Posts.PostViewport.YOffset)
 	}
 
 	// Should not panic
@@ -745,32 +855,30 @@ func TestViewPostsViewportContentUpdate(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:3]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:3]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
-	// First render
-	output1 := m.View()
+	m.syncPostsPage()
+	content1 := m.Posts.postContent
 
-	// Add more posts
-	m.PostList = posts[:5]
+	m.Posts.PostList = posts[:5]
+	m.syncPostsPage()
+	content2 := m.Posts.postContent
 
-	output2 := m.View()
-
-	if len(output2) <= len(output1) {
-		t.Errorf("Output should grow with more posts: before=%d, after=%d", len(output1), len(output2))
+	if len(content2) <= len(content1) {
+		t.Errorf("content should grow with more posts: before=%d, after=%d", len(content1), len(content2))
 	}
 
-	// Verify the new posts' content is in output
 	for _, p := range posts[3:5] {
 		firstLine := strings.Split(p.Text, "\n")[0]
-		if firstLine != "" && !containsStr(output2, strings.TrimSpace(firstLine)) {
+		if firstLine != "" && !containsStr(content2, strings.TrimSpace(firstLine)) {
 			t.Errorf("New post pid=%d not visible after adding", p.Pid)
 		}
 	}
 
-	t.Logf("Output lengths: 3 posts=%d, 5 posts=%d", len(output1), len(output2))
+	t.Logf("Content lengths: 3 posts=%d, 5 posts=%d", len(content1), len(content2))
 }
 
 func TestViewPostsResizeDuringRender(t *testing.T) {
@@ -781,8 +889,8 @@ func TestViewPostsResizeDuringRender(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:3]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:3]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -792,7 +900,7 @@ func TestViewPostsResizeDuringRender(t *testing.T) {
 	// Resize to 120x40
 	m.Width = 120
 	m.Height = 40
-	m.postContent = "" // Force content update
+	m.Posts.postContent = "" // Force content update
 
 	output2 := m.View()
 
@@ -820,8 +928,8 @@ func TestViewPostsStrippedLines(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:3]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:3]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -860,14 +968,120 @@ func TestViewPostsStrippedLines(t *testing.T) {
 	}
 }
 
+func TestViewShowsTabBarAtTop(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Width = 80
+	m.Height = 24
+
+	lines := visibleLines(m.View())
+	if len(lines) == 0 {
+		t.Fatal("No visible lines after stripping ANSI codes")
+	}
+
+	if !strings.Contains(lines[0], "首页") || !strings.Contains(lines[0], "帖子") {
+		t.Fatalf("Line[0] = %q, want tab bar with 首页 and 帖子", lines[0])
+	}
+}
+
+func TestViewLinesDoNotOverflowWidth(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Width = 80
+	m.Height = 24
+
+	for i, line := range frameLines(m.View()) {
+		if lipgloss.Width(line) > m.Width {
+			t.Fatalf("line[%d] width = %d, want <= %d: %q", i, lipgloss.Width(line), m.Width, line)
+		}
+	}
+}
+
+func TestViewFrameMatchesConfiguredDimensionsPosts(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Width = 80
+	m.Height = 24
+
+	lines := frameLines(m.View())
+	if len(lines) != m.Height {
+		t.Fatalf("frame line count = %d, want %d", len(lines), m.Height)
+	}
+
+	for i, line := range lines {
+		if lipgloss.Width(line) > m.Width {
+			t.Fatalf("line[%d] width = %d, want <= %d: %q", i, lipgloss.Width(line), m.Width, line)
+		}
+	}
+}
+
+func TestViewFrameMatchesConfiguredDimensionsHome(t *testing.T) {
+	m := newTestModel()
+	m.Page = PageHome
+	m.Home.LoggedIn = true
+	m.Home.LoginUser = "testuser"
+	m.Home.CrawlerState = CrawlerStopped
+	m.Width = 80
+	m.Height = 24
+
+	lines := frameLines(m.View())
+	if len(lines) != m.Height {
+		t.Fatalf("frame line count = %d, want %d", len(lines), m.Height)
+	}
+
+	for i, line := range lines {
+		if lipgloss.Width(line) > m.Width {
+			t.Fatalf("line[%d] width = %d, want <= %d: %q", i, lipgloss.Width(line), m.Width, line)
+		}
+	}
+}
+
+func TestDetailViewportBodyHeightCappedToHalf(t *testing.T) {
+	p := NewPostsPageModel()
+	p.ShowPostDetail = true
+	p.CurrentPost = &models.Post{
+		Pid:  42,
+		Text: strings.Repeat("这是一段很长的正文，用来测试正文高度上限。", 40),
+	}
+	p.CommentList = []models.Comment{
+		{Cid: 1, Text: "评论1", Timestamp: 1100, NameTag: "user1"},
+		{Cid: 2, Text: "评论2", Timestamp: 1200, NameTag: "user2"},
+	}
+
+	bodyHeight, commentHeight := p.calcDetailViewportHeights(24)
+	available := p.calcPostViewportHeight(24) - 4
+
+	if bodyHeight > available/2 {
+		t.Fatalf("bodyHeight = %d, want <= %d", bodyHeight, available/2)
+	}
+	if commentHeight < available-bodyHeight {
+		t.Fatalf("commentHeight = %d, want >= %d", commentHeight, available-bodyHeight)
+	}
+}
+
+func TestDetailViewportBodyHeightStaysCompactForShortPost(t *testing.T) {
+	p := NewPostsPageModel()
+	p.ShowPostDetail = true
+	p.CurrentPost = &models.Post{
+		Pid:  7,
+		Text: "短正文",
+	}
+	p.CommentList = []models.Comment{
+		{Cid: 1, Text: "评论1", Timestamp: 1100, NameTag: "user1"},
+	}
+
+	bodyHeight, _ := p.calcDetailViewportHeights(24)
+	if bodyHeight > 2 {
+		t.Fatalf("bodyHeight = %d, want <= 2 for short post", bodyHeight)
+	}
+}
+
 func TestViewHomeStrippedLines(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.LoggedIn = true
-	m.LoginUser = "testuser"
-	m.CrawlerState = CrawlerStopped
-	m.TotalPosts = 100
-	m.TotalComments = 500
+	m.Home.LoggedIn = true
+	m.Home.LoginUser = "testuser"
+	m.Home.CrawlerState = CrawlerStopped
 	m.Width = 80
 	m.Height = 24
 
@@ -881,18 +1095,18 @@ func TestViewHomeStrippedLines(t *testing.T) {
 	// Title should be in the content (tab bar is first, then separator, then content)
 	titleFound := false
 	for _, line := range lines {
-		if strings.Contains(line, "PKUHole Crawler") {
+		if strings.Contains(line, "TreeHole TUI") {
 			titleFound = true
 			break
 		}
 	}
 	if !titleFound {
-		t.Errorf("Title 'PKUHole Crawler' not found in visible lines")
+		t.Errorf("Title 'TreeHole TUI' not found in visible lines")
 	}
 
 	// Check key content lines
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"PKUHole", "已登录", "testuser", "已停止", "帖子总数", "100", "评论总数", "500"}
+	expectedContent := []string{"TreeHole", "已登录", "testuser", "已停止", "上次爬取", "第0页"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)
@@ -905,14 +1119,14 @@ func TestViewHomeStrippedLines(t *testing.T) {
 func TestViewPostDetailStrippedLines(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
 		Pid: 42, Text: "Detail post text", Timestamp: 1000,
 		Reply: 5, Likenum: 10,
 	}
-	m.CommentList = []models.Comment{
+	m.Posts.CommentList = []models.Comment{
 		{Cid: 1, Text: "First comment", Timestamp: 1100, NameTag: "user1"},
-		{Cid: 2, Text: "Second comment", Timestamp: 1200, NameTag: "user2"},
+		{Cid: 2, Text: "Second comment", Timestamp: 1200, NameTag: "user2", Quote: &models.Comment{NameTag: "user1", Text: "quoted text"}},
 	}
 	m.Width = 80
 	m.Height = 24
@@ -921,7 +1135,7 @@ func TestViewPostDetailStrippedLines(t *testing.T) {
 	lines := visibleLines(output)
 
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"#42", "Detail post text", "First comment", "Second comment", "Esc"}
+	expectedContent := []string{"#42", "Detail post text", "First comment", "Second comment", "user1: quoted text", "正序", "Esc"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)
@@ -931,13 +1145,145 @@ func TestViewPostDetailStrippedLines(t *testing.T) {
 	t.Logf("Post detail: %d visible lines", len(lines))
 }
 
+func TestViewPostDetailOmitsBodyHeading(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	m.Posts.CommentList = []models.Comment{
+		{Cid: 1, Text: "First comment", Timestamp: 1100, NameTag: "user1"},
+	}
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+	lines := visibleLines(output)
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "正文" {
+			t.Fatalf("detail view should not show standalone body heading: %q", line)
+		}
+	}
+	allText := strings.Join(lines, " ")
+	if !strings.Contains(allText, "评论 1  正序") {
+		t.Fatalf("detail view missing comments heading: %q", allText)
+	}
+}
+
+func TestViewPostDetailCommentFormatMatchesTarget(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	m.Posts.CommentList = []models.Comment{
+		{Cid: 1, Text: "什么专业", Timestamp: 1200, NameTag: "Bob"},
+		{Cid: 2, Text: "外院……", Timestamp: 1260, NameTag: "洞主", Quote: &models.Comment{NameTag: "Bob", Text: "什么专业"}},
+	}
+	m.Width = 80
+	m.Height = 24
+
+	lines := visibleLines(m.View())
+	allText := strings.Join(lines, "\n")
+
+	for _, want := range []string{
+		"评论 2  正序",
+		"1970-01-01 08:20",
+		"Bob: 什么专业",
+		"1970-01-01 08:21",
+		"Bob: 什么专业",
+		"洞主: 外院……",
+	} {
+		if !strings.Contains(allText, want) {
+			t.Fatalf("detail view missing %q in:\n%s", want, allText)
+		}
+	}
+}
+
+func TestViewPostListShowsImagePlaceholder(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: "带图帖子", Timestamp: 1000, MediaIds: "1"},
+	}
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+	if !strings.Contains(strings.Join(visibleLines(output), "\n"), "[图片]") {
+		t.Fatalf("post list should show image placeholder, got:\n%s", output)
+	}
+}
+
+func TestViewPostDetailShowsImagePlaceholder(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10, MediaIds: "1",
+	}
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+	if !strings.Contains(strings.Join(visibleLines(output), "\n"), "[图片]") {
+		t.Fatalf("post detail should show image placeholder, got:\n%s", output)
+	}
+}
+
+func TestViewPostDetailCommentShowsImagePlaceholder(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	m.Posts.CommentList = []models.Comment{
+		{Cid: 1, Text: "评论文本", Timestamp: 1100, NameTag: "user1", MediaIds: "10"},
+	}
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+	if !strings.Contains(strings.Join(visibleLines(output), "\n"), "[图片]") {
+		t.Fatalf("comment should show image placeholder, got:\n%s", output)
+	}
+}
+
+func TestBuildCommentContentReverseOrder(t *testing.T) {
+	m := newTestModel()
+	m.Posts.CommentList = []models.Comment{
+		{Cid: 2, Text: "Second comment", Timestamp: 1200, NameTag: "user2"},
+		{Cid: 1, Text: "First comment", Timestamp: 1100, NameTag: "user1"},
+	}
+	m.Posts.CommentSortAsc = false
+
+	content := stripANSI(m.Posts.buildCommentContent(72))
+	firstIdx := strings.Index(content, "Second comment")
+	secondIdx := strings.Index(content, "First comment")
+	if firstIdx == -1 || secondIdx == -1 {
+		t.Fatal("comment content missing expected comments")
+	}
+	if firstIdx > secondIdx {
+		t.Fatal("reverse order should render second comment before first comment")
+	}
+}
+
 func TestViewConfigDialogStrippedLines(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
-	m.ConfigUsername = "testuser"
-	m.ConfigPassword = "secret"
-	m.ConfigSecretKey = "KEY123"
+	m.ConfigDialog = NewConfigDialog(&config.Config{
+		Username:  "testuser",
+		Password:  "secret",
+		SecretKey: "KEY123",
+	})
 	m.Width = 80
 	m.Height = 24
 
@@ -988,8 +1334,8 @@ func TestViewPostsStrippedLinesWithRealData(t *testing.T) {
 
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = posts[:3]
-	m.SelectedPostIdx = 0
+	m.Posts.PostList = posts[:3]
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -1048,10 +1394,10 @@ func TestViewNoANSILeakage(t *testing.T) {
 	// Verify that ANSI codes are properly closed (no leakage)
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Test post", Timestamp: 1000, Anonymous: true},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -1078,33 +1424,33 @@ func TestViewStrippedOutputNotEmpty(t *testing.T) {
 		{"home_stopped", func() Model {
 			m := newTestModel()
 			m.Page = PageHome
-			m.CrawlerState = CrawlerStopped
+			m.Home.CrawlerState = CrawlerStopped
 			return m
 		}()},
 		{"home_running", func() Model {
 			m := newTestModel()
 			m.Page = PageHome
-			m.CrawlerState = CrawlerRunning
+			m.Home.CrawlerState = CrawlerRunning
 			return m
 		}()},
 		{"posts_empty", func() Model {
 			m := newTestModel()
 			m.Page = PagePosts
-			m.PostList = nil
+			m.Posts.PostList = nil
 			return m
 		}()},
 		{"posts_with_data", func() Model {
 			m := newTestModel()
 			m.Page = PagePosts
-			m.PostList = []models.Post{{Pid: 1, Text: "Hello", Timestamp: 1000}}
-			m.SelectedPostIdx = 0
+			m.Posts.PostList = []models.Post{{Pid: 1, Text: "Hello", Timestamp: 1000}}
+			m.Posts.SelectedPostIdx = 0
 			return m
 		}()},
 		{"detail_view", func() Model {
 			m := newTestModel()
 			m.Page = PagePosts
-			m.ShowPostDetail = true
-			m.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
+			m.Posts.ShowPostDetail = true
+			m.Posts.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
 			return m
 		}()},
 		{"config_dialog", func() Model {
@@ -1120,7 +1466,7 @@ func TestViewStrippedOutputNotEmpty(t *testing.T) {
 		{"logs_dialog", func() Model {
 			m := newTestModel()
 			m.Dialog = DialogLogs
-			m.LogLines = []string{"log line"}
+			m.LogsDialog.SetLines([]string{"log line"})
 			return m
 		}()},
 	}

@@ -79,7 +79,24 @@ go build -o treehole ./cmd/
 
 ```bash
 ./treehole
+
+# 把 TUI 的真实终端输出和最新屏幕快照写到目录里
+./treehole --tui-capture-dir ./.treehole-tui
 ```
+
+TUI 主题会默认根据当前终端背景自动选择深色或浅色。也可以手动覆盖：
+
+```bash
+TREEHOLE_THEME=dark ./treehole
+TREEHOLE_THEME=light ./treehole
+TREEHOLE_THEME=auto ./treehole
+TREEHOLE_TUI_CAPTURE_DIR=./.treehole-tui ./treehole
+```
+
+如果开启了 TUI 捕获，会在指定目录生成：
+- `raw-output.ansi`：Bubble Tea 实际写到终端的原始 ANSI 字节流，包含 alt-screen、光标控制和颜色。
+- `current-frame.ansi`：最近一次 `View()` 渲染出的完整屏幕内容，保留 ANSI 颜色，适合直接读取当前画面。
+- `current-frame.txt`：去掉 ANSI 控制序列后的纯文本快照，便于脚本或调试读取。
 
 界面包含多个标签页（Tab 切换）：
 - **Home**: 爬虫启停控制、统计信息

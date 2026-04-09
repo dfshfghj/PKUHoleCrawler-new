@@ -217,12 +217,6 @@ func (d *Database) GetCommentCount() (int, error) {
 	return int(count), err
 }
 
-func (d *Database) GetPosts(offset, limit int) ([]models.Post, error) {
-	var posts []models.Post
-	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts ORDER BY pid DESC LIMIT ? OFFSET ?", limit, offset).Scan(&posts).Error
-	return posts, err
-}
-
 func (d *Database) GetPostByPid(pid int32) (*models.Post, error) {
 	var post models.Post
 	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE pid = ?", pid).First(&post).Error
@@ -232,34 +226,18 @@ func (d *Database) GetPostByPid(pid int32) (*models.Post, error) {
 	return &post, nil
 }
 
-func (d *Database) GetCommentsByPid(pid int32) ([]models.Comment, error) {
-	var comments []models.Comment
-	err := d.db.Raw("SELECT cid, pid, name_tag, text, timestamp, quote_id, media_ids FROM comments WHERE pid = ? ORDER BY cid ASC", pid).Scan(&comments).Error
-	return comments, err
-}
-
-func (d *Database) SearchPosts(keyword string, offset, limit int) ([]models.Post, error) {
-	var posts []models.Post
-	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? ORDER BY pid DESC LIMIT ? OFFSET ?", escapeLikePattern(keyword), limit, offset).Scan(&posts).Error
-	return posts, err
-}
-
-func (d *Database) SearchPostsCount(keyword string) (int, error) {
-	var count int64
-	err := d.db.Raw("SELECT COUNT(*) FROM posts WHERE text LIKE ?", escapeLikePattern(keyword)).Scan(&count).Error
-	return int(count), err
-}
-
 // GetPostsCursor 游标分页获取帖子列表 (DESC)
 func (d *Database) GetPostsCursor(cursor int, limit int, sortAsc bool) ([]models.Post, error) {
 	var posts []models.Post
 	order := "DESC"
+	comparator := "<"
 	if sortAsc {
 		order = "ASC"
+		comparator = ">"
 	}
 
 	if cursor != 0 {
-		err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE pid < ? ORDER BY pid "+order+" LIMIT ?", cursor, limit).Scan(&posts).Error
+		err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE pid "+comparator+" ? ORDER BY pid "+order+" LIMIT ?", cursor, limit).Scan(&posts).Error
 		return posts, err
 	}
 	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts ORDER BY pid "+order+" LIMIT ?", limit).Scan(&posts).Error
@@ -269,12 +247,14 @@ func (d *Database) GetPostsCursor(cursor int, limit int, sortAsc bool) ([]models
 func (d *Database) SearchPostsCursor(keyword string, cursor int, limit int, sortAsc bool) ([]models.Post, error) {
 	var posts []models.Post
 	order := "DESC"
+	comparator := "<"
 	if sortAsc {
 		order = "ASC"
+		comparator = ">"
 	}
 
 	if cursor != 0 {
-		err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? AND pid < ? ORDER BY pid "+order+" LIMIT ?", escapeLikePattern(keyword), cursor, limit).Scan(&posts).Error
+		err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? AND pid "+comparator+" ? ORDER BY pid "+order+" LIMIT ?", escapeLikePattern(keyword), cursor, limit).Scan(&posts).Error
 		return posts, err
 	}
 	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? ORDER BY pid "+order+" LIMIT ?", escapeLikePattern(keyword), limit).Scan(&posts).Error

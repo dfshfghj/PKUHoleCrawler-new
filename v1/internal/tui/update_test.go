@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
+	"treehole/internal/config"
 	"treehole/internal/models"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -12,21 +14,33 @@ import (
 func newTestModel() Model {
 	pv := viewport.New(80, 20)
 	cv := viewport.New(80, 20)
+	posts := NewPostsPageModel()
+	posts.PostViewport = &pv
+	posts.CommentViewport = &cv
+	posts.PostPerPage = 20
+	home := NewHomePageModel()
+	home.CrawlerState = CrawlerStopped
+	home.CrawlMode = CrawlSequential
+	home.MonitorPages = 3
 	return Model{
-		Page:            PagePosts,
-		TabCursor:       1,
-		Dialog:          DialogNone,
-		CrawlerState:    CrawlerStopped,
-		CrawlMode:       CrawlSequential,
-		MonitorPages:    3,
-		PostPerPage:     20,
-		PostViewport:    &pv,
-		CommentViewport: &cv,
-		Width:           80,
-		Height:          24,
-		ConfigUsername:  "testuser",
-		ConfigPassword:  "testpass",
-		ConfigSecretKey: "testkey",
+		Page:      PagePosts,
+		TabCursor: 1,
+		Dialog:    DialogNone,
+		Home:      home,
+		Posts:     posts,
+		Width:     80,
+		Height:    24,
+		Config: &config.Config{
+			Username:  "testuser",
+			Password:  "testpass",
+			SecretKey: "testkey",
+		},
+		ConfigDialog: NewConfigDialog(&config.Config{
+			Username:  "testuser",
+			Password:  "testpass",
+			SecretKey: "testkey",
+		}),
+		LogsDialog: NewLogsDialog(),
 	}
 }
 
@@ -48,16 +62,16 @@ func TestUpdateWindowSize(t *testing.T) {
 
 func TestUpdateLoginMsgSuccess(t *testing.T) {
 	m := newTestModel()
-	m.LoggedIn = false
+	m.Home.LoggedIn = false
 
 	result, _ := m.Update(LoginMsg{Username: "testuser"})
 	m = result.(Model)
 
-	if !m.LoggedIn {
+	if !m.Home.LoggedIn {
 		t.Error("LoggedIn should be true")
 	}
-	if m.LoginUser != "testuser" {
-		t.Errorf("LoginUser = %s, want testuser", m.LoginUser)
+	if m.Home.LoginUser != "testuser" {
+		t.Errorf("LoginUser = %s, want testuser", m.Home.LoginUser)
 	}
 }
 
@@ -67,7 +81,7 @@ func TestUpdateLoginMsgError(t *testing.T) {
 	result, _ := m.Update(LoginMsg{Error: errTest})
 	m = result.(Model)
 
-	if m.LoggedIn {
+	if m.Home.LoggedIn {
 		t.Error("LoggedIn should be false on error")
 	}
 	if m.LastError == "" {
@@ -81,58 +95,44 @@ type testError struct{ s string }
 
 func (e *testError) Error() string { return e.s }
 
-func TestUpdateLoadStatsMsg(t *testing.T) {
-	m := newTestModel()
-
-	result, _ := m.Update(LoadStatsMsg{PostCount: 100, CommentCount: 500})
-	m = result.(Model)
-
-	if m.TotalPosts != 100 {
-		t.Errorf("TotalPosts = %d, want 100", m.TotalPosts)
-	}
-	if m.TotalComments != 500 {
-		t.Errorf("TotalComments = %d, want 500", m.TotalComments)
-	}
-}
-
 func TestUpdateLoadPostsMsg(t *testing.T) {
 	m := newTestModel()
-	m.PostListLoading = true
+	m.Posts.PostListLoading = true
 
 	posts := []models.Post{
 		{Pid: 1, Text: "Post 1", Timestamp: 1000},
 		{Pid: 2, Text: "Post 2", Timestamp: 2000},
 	}
 
-	result, _ := m.Update(LoadPostsMsg{Posts: posts, Total: 50, Page: 1})
+	result, _ := m.Update(LoadPostsMsg{Posts: posts, Cursor: 0, HasMore: true})
 	m = result.(Model)
 
-	if m.PostListLoading {
+	if m.Posts.PostListLoading {
 		t.Error("PostListLoading should be false after load")
 	}
-	if len(m.PostList) != 2 {
-		t.Errorf("PostList len = %d, want 2", len(m.PostList))
+	if len(m.Posts.PostList) != 2 {
+		t.Errorf("PostList len = %d, want 2", len(m.Posts.PostList))
 	}
-	if m.PostListTotal != 50 {
-		t.Errorf("PostListTotal = %d, want 50", m.PostListTotal)
+	if m.Posts.PostListTotal != 2 {
+		t.Errorf("PostListTotal = %d, want loaded post count 2", m.Posts.PostListTotal)
 	}
-	if m.PostListError != "" {
-		t.Errorf("PostListError should be empty, got: %s", m.PostListError)
+	if m.Posts.PostListError != "" {
+		t.Errorf("PostListError should be empty, got: %s", m.Posts.PostListError)
 	}
 }
 
 func TestUpdateLoadPostsMsgError(t *testing.T) {
 	m := newTestModel()
-	m.PostListLoading = true
+	m.Posts.PostListLoading = true
 
 	result, _ := m.Update(LoadPostsMsg{Error: errTest})
 	m = result.(Model)
 
-	if m.PostListLoading {
+	if m.Posts.PostListLoading {
 		t.Error("PostListLoading should be false")
 	}
-	if m.PostListError != "test error" {
-		t.Errorf("PostListError = %s, want 'test error'", m.PostListError)
+	if m.Posts.PostListError != "test error" {
+		t.Errorf("PostListError = %s, want 'test error'", m.Posts.PostListError)
 	}
 }
 
@@ -147,8 +147,29 @@ func TestUpdateLoadCommentsMsg(t *testing.T) {
 	result, _ := m.Update(LoadCommentsMsg{Comments: comments})
 	m = result.(Model)
 
-	if len(m.CommentList) != 2 {
-		t.Errorf("CommentList len = %d, want 2", len(m.CommentList))
+	if len(m.Posts.CommentList) != 2 {
+		t.Errorf("CommentList len = %d, want 2", len(m.Posts.CommentList))
+	}
+}
+
+func TestHandlePostsKeyToggleCommentSortInDetail(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CommentSortAsc = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1}
+	m.Posts.CommentList = []models.Comment{
+		{Cid: 1, Text: "Comment 1", Timestamp: 1000},
+	}
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = result
+
+	if cmd == nil {
+		t.Error("Should trigger reload of comments with new sort order")
+	}
+	if !m.Posts.CommentSortAsc {
+		t.Error("CommentSortAsc should only change after LoadCommentsMsg")
 	}
 }
 
@@ -159,47 +180,47 @@ func TestUpdateSearchPostsMsg(t *testing.T) {
 		{Pid: 1, Text: "Search result", Timestamp: 1000},
 	}
 
-	result, _ := m.Update(SearchPostsMsg{Posts: posts, Total: 1, Page: 1})
+	result, _ := m.Update(SearchPostsMsg{Posts: posts, Cursor: 0, HasMore: false})
 	m = result.(Model)
 
-	if !m.SearchActive {
+	if !m.Posts.SearchActive {
 		t.Error("SearchActive should be true after search")
 	}
-	if m.Searching {
+	if m.Posts.Searching {
 		t.Error("Searching should be false after results")
 	}
-	if m.PostListTotal != 1 {
-		t.Errorf("PostListTotal = %d, want 1", m.PostListTotal)
+	if m.Posts.PostListTotal != 1 {
+		t.Errorf("PostListTotal = %d, want loaded search result count 1", m.Posts.PostListTotal)
 	}
 }
 
 func TestUpdateCrawlMsgError(t *testing.T) {
 	m := newTestModel()
-	m.CrawlerState = CrawlerRunning
+	m.Home.CrawlerState = CrawlerRunning
 
 	result, _ := m.Update(CrawlMsg{Error: errTest, Page: 1})
 	m = result.(Model)
 
-	if m.CrawlerState != CrawlerError {
-		t.Errorf("CrawlerState = %v, want CrawlerError", m.CrawlerState)
+	if m.Home.CrawlerState != CrawlerError {
+		t.Errorf("CrawlerState = %v, want CrawlerError", m.Home.CrawlerState)
 	}
-	if m.HomeLastError != "test error" {
-		t.Errorf("HomeLastError = %s, want 'test error'", m.HomeLastError)
+	if m.Home.HomeLastError != "test error" {
+		t.Errorf("HomeLastError = %s, want 'test error'", m.Home.HomeLastError)
 	}
 }
 
 func TestUpdateCrawlMsgSuccessReturnsCmd(t *testing.T) {
 	m := newTestModel()
-	m.CrawlerState = CrawlerRunning
+	m.Home.CrawlerState = CrawlerRunning
 
-	result, cmd := m.Update(CrawlMsg{PostsCount: 10, CommentsCount: 50, Page: 3})
+	result, cmd := m.Update(CrawlMsg{Page: 3})
 	m = result.(Model)
 
 	if cmd == nil {
 		t.Error("Expected a cmd to continue crawling")
 	}
-	if m.LastCrawlPage != 3 {
-		t.Errorf("LastCrawlPage = %d, want 3", m.LastCrawlPage)
+	if m.Home.LastCrawlPage != 3 {
+		t.Errorf("LastCrawlPage = %d, want 3", m.Home.LastCrawlPage)
 	}
 }
 
@@ -249,8 +270,8 @@ func TestHandleKeyOpenConfig(t *testing.T) {
 	if m.Dialog != DialogConfig {
 		t.Errorf("Dialog = %v, want DialogConfig", m.Dialog)
 	}
-	if m.ConfigFieldIdx != 0 {
-		t.Errorf("ConfigFieldIdx = %d, want 0", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 0 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 0", m.ConfigDialog.FocusIndex())
 	}
 	if cmd == nil {
 		t.Error("Opening config should trigger loadConfigCmd")
@@ -266,8 +287,8 @@ func TestHandleKeyOpenLogs(t *testing.T) {
 	if m.Dialog != DialogLogs {
 		t.Errorf("Dialog = %v, want DialogLogs", m.Dialog)
 	}
-	if !m.LogLoading {
-		t.Error("LogLoading should be true")
+	if !m.LogsDialog.Loading() {
+		t.Error("LogsDialog.Loading should be true")
 	}
 	if cmd == nil {
 		t.Error("Opening logs should trigger loadLogsCmd")
@@ -323,14 +344,14 @@ func TestHandleKeyTabSwitchBack(t *testing.T) {
 func TestHandleHomeKeyStartCrawler(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.CrawlerState = CrawlerStopped
-	m.HomeButtonIdx = 0
+	m.Home.CrawlerState = CrawlerStopped
+	m.Home.HomeButtonIdx = 0
 
 	result, cmd := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
 
-	if m.CrawlerState != CrawlerRunning {
-		t.Errorf("CrawlerState = %v, want CrawlerRunning", m.CrawlerState)
+	if m.Home.CrawlerState != CrawlerRunning {
+		t.Errorf("CrawlerState = %v, want CrawlerRunning", m.Home.CrawlerState)
 	}
 	if cmd == nil {
 		t.Error("Starting crawler should trigger crawl command")
@@ -340,64 +361,64 @@ func TestHandleHomeKeyStartCrawler(t *testing.T) {
 func TestHandleHomeKeyStopCrawler(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.CrawlerState = CrawlerRunning
-	m.HomeButtonIdx = 1
+	m.Home.CrawlerState = CrawlerRunning
+	m.Home.HomeButtonIdx = 1
 
 	result, _ := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
 
-	if m.CrawlerState != CrawlerStopped {
-		t.Errorf("CrawlerState = %v, want CrawlerStopped", m.CrawlerState)
+	if m.Home.CrawlerState != CrawlerStopped {
+		t.Errorf("CrawlerState = %v, want CrawlerStopped", m.Home.CrawlerState)
 	}
 }
 
 func TestHandleHomeKeyToggleMode(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.HomeButtonIdx = 2
-	m.CrawlMode = CrawlSequential
+	m.Home.HomeButtonIdx = 2
+	m.Home.CrawlMode = CrawlSequential
 
 	result, _ := m.handleHomeKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
 
-	if m.CrawlMode != CrawlMonitor {
-		t.Errorf("CrawlMode = %v, want CrawlMonitor", m.CrawlMode)
+	if m.Home.CrawlMode != CrawlMonitor {
+		t.Errorf("CrawlMode = %v, want CrawlMonitor", m.Home.CrawlMode)
 	}
 }
 
 func TestHandleHomeKeyButtonNavigation(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.HomeButtonIdx = 0
+	m.Home.HomeButtonIdx = 0
 
 	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
-	if m.HomeButtonIdx != 1 {
-		t.Errorf("HomeButtonIdx = %d, want 1", m.HomeButtonIdx)
-	}
-
-	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
-	if m.HomeButtonIdx != 2 {
-		t.Errorf("HomeButtonIdx = %d, want 2", m.HomeButtonIdx)
+	if m.Home.HomeButtonIdx != 1 {
+		t.Errorf("HomeButtonIdx = %d, want 1", m.Home.HomeButtonIdx)
 	}
 
 	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
-	if m.HomeButtonIdx != 2 {
-		t.Errorf("HomeButtonIdx should stay at 2, got %d", m.HomeButtonIdx)
+	if m.Home.HomeButtonIdx != 2 {
+		t.Errorf("HomeButtonIdx = %d, want 2", m.Home.HomeButtonIdx)
+	}
+
+	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyRight})
+	if m.Home.HomeButtonIdx != 2 {
+		t.Errorf("HomeButtonIdx should stay at 2, got %d", m.Home.HomeButtonIdx)
 	}
 
 	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
-	if m.HomeButtonIdx != 1 {
-		t.Errorf("HomeButtonIdx = %d, want 1", m.HomeButtonIdx)
+	if m.Home.HomeButtonIdx != 1 {
+		t.Errorf("HomeButtonIdx = %d, want 1", m.Home.HomeButtonIdx)
 	}
 
 	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
-	if m.HomeButtonIdx != 0 {
-		t.Errorf("HomeButtonIdx = %d, want 0", m.HomeButtonIdx)
+	if m.Home.HomeButtonIdx != 0 {
+		t.Errorf("HomeButtonIdx = %d, want 0", m.Home.HomeButtonIdx)
 	}
 
 	m, _ = m.handleHomeKey(tea.KeyMsg{Type: tea.KeyLeft})
-	if m.HomeButtonIdx != 0 {
-		t.Errorf("HomeButtonIdx should stay at 0, got %d", m.HomeButtonIdx)
+	if m.Home.HomeButtonIdx != 0 {
+		t.Errorf("HomeButtonIdx should stay at 0, got %d", m.Home.HomeButtonIdx)
 	}
 }
 
@@ -407,110 +428,127 @@ func TestHandlePostsKeySearch(t *testing.T) {
 	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
 	m = result
 
-	if !m.Searching {
+	if !m.Posts.Searching {
 		t.Error("Searching should be true after /")
 	}
-	if m.SearchInput != "" {
-		t.Errorf("SearchInput = %s, want empty", m.SearchInput)
+	if m.Posts.SearchInput != "" {
+		t.Errorf("SearchInput = %s, want empty", m.Posts.SearchInput)
 	}
 }
 
 func TestHandlePostsKeySearchInput(t *testing.T) {
 	m := newTestModel()
-	m.Searching = true
+	m.Posts.Searching = true
 
 	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 	m = result
 
-	if m.SearchInput != "t" {
-		t.Errorf("SearchInput = %s, want 't'", m.SearchInput)
+	if m.Posts.SearchInput != "t" {
+		t.Errorf("SearchInput = %s, want 't'", m.Posts.SearchInput)
 	}
 
 	result, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'e'}})
 	m = result
 
-	if m.SearchInput != "te" {
-		t.Errorf("SearchInput = %s, want 'te'", m.SearchInput)
+	if m.Posts.SearchInput != "te" {
+		t.Errorf("SearchInput = %s, want 'te'", m.Posts.SearchInput)
 	}
 }
 
 func TestHandlePostsKeySearchBackspace(t *testing.T) {
 	m := newTestModel()
-	m.Searching = true
-	m.SearchInput = "test"
+	m.Posts.Searching = true
+	m.Posts.SearchInput = "test"
 
 	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = result
 
-	if m.SearchInput != "tes" {
-		t.Errorf("SearchInput = %s, want 'tes'", m.SearchInput)
+	if m.Posts.SearchInput != "tes" {
+		t.Errorf("SearchInput = %s, want 'tes'", m.Posts.SearchInput)
 	}
 }
 
 func TestHandlePostsKeySearchCancel(t *testing.T) {
 	m := newTestModel()
-	m.Searching = true
-	m.SearchInput = "test"
-	m.SearchActive = true
+	m.Posts.Searching = true
+	m.Posts.SearchInput = "test"
+	m.Posts.SearchActive = true
+	m.Posts.PostsMode = PostsModeSearchInput
 
 	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
 	m = result
 
-	if m.Searching {
+	if m.Posts.Searching {
 		t.Error("Searching should be false after Escape")
 	}
-	if m.SearchInput != "" {
-		t.Errorf("SearchInput = %s, want empty", m.SearchInput)
+	if m.Posts.SearchInput != "" {
+		t.Errorf("SearchInput = %s, want empty", m.Posts.SearchInput)
 	}
-	if m.SearchActive {
-		t.Error("SearchActive should be false after Escape")
+	if !m.Posts.SearchActive {
+		t.Error("SearchActive should stay true when canceling input over existing search results")
+	}
+	if m.Posts.PostsMode != PostsModeSearchResults {
+		t.Errorf("PostsMode = %v, want PostsModeSearchResults", m.Posts.PostsMode)
 	}
 }
 
 func TestHandlePostsKeyNavigation(t *testing.T) {
 	m := newTestModel()
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Post 1", Timestamp: 1000},
 		{Pid: 2, Text: "Post 2", Timestamp: 2000},
 		{Pid: 3, Text: "Post 3", Timestamp: 3000},
+		{Pid: 4, Text: "Post 4", Timestamp: 4000},
+		{Pid: 5, Text: "Post 5", Timestamp: 5000},
 	}
-	m.SelectedPostIdx = 1
+	m.Height = 8
+	m.Posts.SelectedPostIdx = 1
+	m.syncPostsPage()
 
 	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.SelectedPostIdx != 0 {
-		t.Errorf("SelectedPostIdx = %d, want 0", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx != 0 {
+		t.Errorf("SelectedPostIdx = %d, want 0", m.Posts.SelectedPostIdx)
 	}
 
 	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.SelectedPostIdx != 1 {
-		t.Errorf("SelectedPostIdx = %d, want 1", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx != 1 {
+		t.Errorf("SelectedPostIdx = %d, want 1", m.Posts.SelectedPostIdx)
 	}
 
 	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.SelectedPostIdx != 2 {
-		t.Errorf("SelectedPostIdx = %d, want 2", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx != 1 {
+		t.Errorf("SelectedPostIdx = %d, want 1 while still inside the same post", m.Posts.SelectedPostIdx)
 	}
 
 	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.SelectedPostIdx != 2 {
-		t.Errorf("SelectedPostIdx should stay at 2, got %d", m.SelectedPostIdx)
+	if m.Posts.SelectedPostIdx != 1 {
+		t.Errorf("SelectedPostIdx = %d, want 1 on separator line after the current post", m.Posts.SelectedPostIdx)
+	}
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.Posts.SelectedPostIdx != 2 {
+		t.Errorf("SelectedPostIdx = %d, want 2 after moving into the next post", m.Posts.SelectedPostIdx)
+	}
+
+	if m.Posts.PostViewport.YOffset == 0 {
+		t.Error("viewport should start scrolling before the selected post leaves the visible area")
 	}
 }
 
 func TestHandlePostsKeyEnterDetail(t *testing.T) {
 	m := newTestModel()
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Post 1", Timestamp: 1000},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 
 	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
 
-	if !m.ShowPostDetail {
+	if !m.Posts.ShowPostDetail {
 		t.Error("ShowPostDetail should be true")
 	}
-	if m.CurrentPost == nil || m.CurrentPost.Pid != 1 {
+	if m.Posts.CurrentPost == nil || m.Posts.CurrentPost.Pid != 1 {
 		t.Error("CurrentPost should be set to selected post")
 	}
 	if cmd == nil {
@@ -520,37 +558,37 @@ func TestHandlePostsKeyEnterDetail(t *testing.T) {
 
 func TestHandlePostsKeyEscFromDetail(t *testing.T) {
 	m := newTestModel()
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{Pid: 1}
-	m.CommentList = []models.Comment{{Cid: 1}}
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1}
+	m.Posts.CommentList = []models.Comment{{Cid: 1}}
 
 	result, _ := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
 	m = result
 
-	if m.ShowPostDetail {
+	if m.Posts.ShowPostDetail {
 		t.Error("ShowPostDetail should be false")
 	}
-	if m.CurrentPost != nil {
+	if m.Posts.CurrentPost != nil {
 		t.Error("CurrentPost should be nil")
 	}
-	if len(m.CommentList) != 0 {
+	if len(m.Posts.CommentList) != 0 {
 		t.Error("CommentList should be cleared")
 	}
 }
 
 func TestHandlePostsKeyRefresh(t *testing.T) {
 	m := newTestModel()
-	m.PostList = []models.Post{{Pid: 1}}
-	m.PostListTotal = 10
-	m.SearchActive = false
+	m.Posts.PostList = []models.Post{{Pid: 1}}
+	m.Posts.PostListTotal = 10
+	m.Posts.SearchActive = false
 
 	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = result
 
-	if !m.PostListLoading {
+	if !m.Posts.PostListLoading {
 		t.Error("PostListLoading should be true")
 	}
-	if len(m.PostList) != 0 {
+	if len(m.Posts.PostList) != 0 {
 		t.Error("PostList should be cleared on refresh")
 	}
 	if cmd == nil {
@@ -560,12 +598,12 @@ func TestHandlePostsKeyRefresh(t *testing.T) {
 
 func TestHandlePostsKeyRefreshDisabledDuringSearch(t *testing.T) {
 	m := newTestModel()
-	m.SearchActive = true
+	m.Posts.SearchActive = true
 
 	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = result
 
-	if m.PostListLoading {
+	if m.Posts.PostListLoading {
 		t.Error("PostListLoading should NOT change during search")
 	}
 	if cmd != nil {
@@ -573,106 +611,132 @@ func TestHandlePostsKeyRefreshDisabledDuringSearch(t *testing.T) {
 	}
 }
 
+func TestHandlePostsKeyPrefetchMoreBeforeLastLine(t *testing.T) {
+	m := newTestModel()
+	m.Height = 12
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: strings.Repeat("a\n", 7) + "a", Timestamp: 1000},
+		{Pid: 2, Text: strings.Repeat("b\n", 7) + "b", Timestamp: 2000},
+	}
+	m.Posts.PostListTotal = 10
+	m.Posts.PostListHasMore = true
+	m.Posts.PostListCursor = 2
+	m.syncPostsPage()
+	m.Posts.CursorLine = m.Posts.totalPostLines() - 8
+	m.Posts.SelectedPostIdx = m.Posts.postIndexAtLine(m.Posts.CursorLine)
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = result
+
+	if !m.Posts.PostListLoading {
+		t.Error("PostListLoading should become true when entering the prefetch buffer")
+	}
+	if cmd == nil {
+		t.Error("Should trigger loading more posts before reaching the final line")
+	}
+}
+
 func TestHandleConfigKeyInput(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
-	m.ConfigUsername = ""
+	m.ConfigDialog = NewConfigDialog(&config.Config{})
 
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if m.ConfigUsername != "a" {
-		t.Errorf("ConfigUsername = %s, want 'a'", m.ConfigUsername)
+	if m.ConfigDialog.Username() != "a" {
+		t.Errorf("ConfigDialog.Username = %s, want 'a'", m.ConfigDialog.Username())
 	}
 
-	m.ConfigFieldIdx = 1
-	m.ConfigPassword = ""
+	m.ConfigDialog.setFocus(1)
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
-	if m.ConfigPassword != "b" {
-		t.Errorf("ConfigPassword = %s, want 'b'", m.ConfigPassword)
+	if m.ConfigDialog.Password() != "b" {
+		t.Errorf("ConfigDialog.Password = %s, want 'b'", m.ConfigDialog.Password())
 	}
 
-	m.ConfigFieldIdx = 2
-	m.ConfigSecretKey = ""
+	m.ConfigDialog.setFocus(2)
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if m.ConfigSecretKey != "c" {
-		t.Errorf("ConfigSecretKey = %s, want 'c'", m.ConfigSecretKey)
+	if m.ConfigDialog.SecretKey() != "c" {
+		t.Errorf("ConfigDialog.SecretKey = %s, want 'c'", m.ConfigDialog.SecretKey())
 	}
 }
 
 func TestHandleConfigKeyBackspace(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
-	m.ConfigUsername = "test"
+	m.ConfigDialog = NewConfigDialog(&config.Config{Username: "test"})
 
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyBackspace})
-	if m.ConfigUsername != "tes" {
-		t.Errorf("ConfigUsername = %s, want 'tes'", m.ConfigUsername)
+	if m.ConfigDialog.Username() != "tes" {
+		t.Errorf("ConfigDialog.Username = %s, want 'tes'", m.ConfigDialog.Username())
 	}
 }
 
 func TestHandleConfigKeyNavigation(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
+	m.ConfigDialog = NewConfigDialog(m.Config)
 
 	// Down should move from field 0 -> 1 -> 2
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.ConfigFieldIdx != 1 {
-		t.Errorf("ConfigFieldIdx = %d, want 1", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 1 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 1", m.ConfigDialog.FocusIndex())
 	}
 
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.ConfigFieldIdx != 2 {
-		t.Errorf("ConfigFieldIdx = %d, want 2", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 2 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 2", m.ConfigDialog.FocusIndex())
 	}
 
 	// Down from field 2 should stay at 2 (capped)
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.ConfigFieldIdx != 2 {
-		t.Errorf("ConfigFieldIdx should stay at 2, got %d", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 3 {
+		t.Errorf("ConfigDialog.FocusIndex should move to save button, got %d", m.ConfigDialog.FocusIndex())
 	}
 
-	// Up should move from field 2 -> 1 -> 0
+	// Up should move from save -> field 2 -> 1 -> 0
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.ConfigFieldIdx != 1 {
-		t.Errorf("ConfigFieldIdx = %d, want 1", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 2 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 2", m.ConfigDialog.FocusIndex())
 	}
 
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.ConfigFieldIdx != 0 {
-		t.Errorf("ConfigFieldIdx = %d, want 0", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 1 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 1", m.ConfigDialog.FocusIndex())
+	}
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.ConfigDialog.FocusIndex() != 0 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 0", m.ConfigDialog.FocusIndex())
 	}
 
 	// Up from field 0 should stay at 0
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.ConfigFieldIdx != 0 {
-		t.Errorf("ConfigFieldIdx should stay at 0, got %d", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 0 {
+		t.Errorf("ConfigDialog.FocusIndex should stay at 0, got %d", m.ConfigDialog.FocusIndex())
 	}
 
 	// Enter on field < 3 moves to save button (idx 3)
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.ConfigFieldIdx != 3 {
-		t.Errorf("ConfigFieldIdx = %d, want 3", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 3 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 3", m.ConfigDialog.FocusIndex())
 	}
 
 	// From idx 3, up should go back to field 2
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.ConfigFieldIdx != 2 {
-		t.Errorf("ConfigFieldIdx = %d, want 2", m.ConfigFieldIdx)
+	if m.ConfigDialog.FocusIndex() != 2 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 2", m.ConfigDialog.FocusIndex())
 	}
 }
 
 func TestHandleConfigKeySave(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 3
+	m.ConfigDialog.setFocus(configSaveButtonIndex)
 
 	result, cmd := m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
 
-	if !m.ConfigSaving {
-		t.Error("ConfigSaving should be true")
+	if !m.ConfigDialog.saving {
+		t.Error("ConfigDialog.saving should be true")
 	}
 	if cmd == nil {
 		t.Error("Should trigger saveConfigCmd")
@@ -682,27 +746,27 @@ func TestHandleConfigKeySave(t *testing.T) {
 func TestHandleLogsKeyNavigation(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogLogs
-	m.LogLines = []string{"line1", "line2", "line3", "line4", "line5"}
-	m.LogOffset = 2
+	m.LogsDialog.SetLines([]string{"line1", "line2", "line3", "line4", "line5"})
+	m.LogsDialog.offset = 2
 
 	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.LogOffset != 3 {
-		t.Errorf("LogOffset = %d, want 3", m.LogOffset)
+	if m.LogsDialog.Offset() != 3 {
+		t.Errorf("LogsDialog.Offset = %d, want 3", m.LogsDialog.Offset())
 	}
 
 	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.LogOffset != 2 {
-		t.Errorf("LogOffset = %d, want 2", m.LogOffset)
+	if m.LogsDialog.Offset() != 2 {
+		t.Errorf("LogsDialog.Offset = %d, want 2", m.LogsDialog.Offset())
 	}
 
 	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.LogOffset != 4 {
-		t.Errorf("LogOffset = %d, want 4", m.LogOffset)
+	if m.LogsDialog.Offset() != 4 {
+		t.Errorf("LogsDialog.Offset = %d, want 4", m.LogsDialog.Offset())
 	}
 
 	m, _ = m.handleLogsKey(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.LogOffset != 0 {
-		t.Errorf("LogOffset = %d, want 0", m.LogOffset)
+	if m.LogsDialog.Offset() != 0 {
+		t.Errorf("LogsDialog.Offset = %d, want 0", m.LogsDialog.Offset())
 	}
 }
 
@@ -713,8 +777,8 @@ func TestHandleLogsKeyRefresh(t *testing.T) {
 	result, cmd := m.handleLogsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 	m = result
 
-	if !m.LogLoading {
-		t.Error("LogLoading should be true")
+	if !m.LogsDialog.Loading() {
+		t.Error("LogsDialog.Loading should be true")
 	}
 	if cmd == nil {
 		t.Error("Should trigger loadLogsCmd")
@@ -739,11 +803,11 @@ func TestSaveConfigMsgSuccess(t *testing.T) {
 	result, _ := m.Update(SaveConfigMsg{})
 	m = result.(Model)
 
-	if !m.ConfigSaveOK {
-		t.Error("ConfigSaveOK should be true")
+	if !m.ConfigDialog.saveOK {
+		t.Error("ConfigDialog.saveOK should be true")
 	}
-	if m.ConfigSaving {
-		t.Error("ConfigSaving should be false")
+	if m.ConfigDialog.saving {
+		t.Error("ConfigDialog.saving should be false")
 	}
 }
 
@@ -753,8 +817,8 @@ func TestSaveConfigMsgError(t *testing.T) {
 	result, _ := m.Update(SaveConfigMsg{Error: errTest})
 	m = result.(Model)
 
-	if m.ConfigSaveOK {
-		t.Error("ConfigSaveOK should be false on error")
+	if m.ConfigDialog.saveOK {
+		t.Error("ConfigDialog.saveOK should be false on error")
 	}
 	if m.LastError != "test error" {
 		t.Errorf("LastError = %s, want 'test error'", m.LastError)
@@ -763,39 +827,36 @@ func TestSaveConfigMsgError(t *testing.T) {
 
 func TestLoadConfigMsgNilConfig(t *testing.T) {
 	m := newTestModel()
+	original := m.Config
 
 	result, _ := m.Update(LoadConfigMsg{Config: nil})
 	m = result.(Model)
 
 	// nil config should not crash or change fields unexpectedly
-	if m.Config != nil {
-		t.Error("Config should remain nil")
+	if m.Config != original {
+		t.Error("Config should remain unchanged when payload config is nil")
 	}
 }
 
 func TestViewHomeContainsExpectedText(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.LoggedIn = true
-	m.LoginUser = "testuser"
-	m.CrawlerState = CrawlerStopped
-	m.TotalPosts = 100
-	m.TotalComments = 500
-	m.LastCrawlPage = 5
+	m.Home.LoggedIn = true
+	m.Home.LoginUser = "testuser"
+	m.Home.CrawlerState = CrawlerStopped
+	m.Home.LastCrawlPage = 5
 	m.Width = 80
 	m.Height = 24
 
 	output := m.View()
 
 	expectedStrings := []string{
-		"PKUHole Crawler",
+		"TreeHole TUI",
 		"已登录",
 		"testuser",
 		"已停止",
-		"帖子总数",
-		"100",
-		"评论总数",
-		"500",
+		"上次爬取",
+		"第5页",
 		"启动爬虫",
 		"停止爬虫",
 		"顺序爬取",
@@ -811,7 +872,7 @@ func TestViewHomeContainsExpectedText(t *testing.T) {
 func TestViewHomeCrawlerRunning(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.CrawlerState = CrawlerRunning
+	m.Home.CrawlerState = CrawlerRunning
 	m.Width = 80
 	m.Height = 24
 
@@ -825,8 +886,8 @@ func TestViewHomeCrawlerRunning(t *testing.T) {
 func TestViewHomeCrawlerError(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.CrawlerState = CrawlerError
-	m.HomeLastError = "connection timeout"
+	m.Home.CrawlerState = CrawlerError
+	m.Home.HomeLastError = "connection timeout"
 	m.Width = 80
 	m.Height = 24
 
@@ -843,8 +904,8 @@ func TestViewHomeCrawlerError(t *testing.T) {
 func TestViewHomeMonitorMode(t *testing.T) {
 	m := newTestModel()
 	m.Page = PageHome
-	m.CrawlMode = CrawlMonitor
-	m.MonitorPages = 3
+	m.Home.CrawlMode = CrawlMonitor
+	m.Home.MonitorPages = 3
 	m.Width = 80
 	m.Height = 24
 
@@ -861,7 +922,7 @@ func TestViewHomeMonitorMode(t *testing.T) {
 func TestViewPostsEmpty(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = nil
+	m.Posts.PostList = nil
 	m.Width = 80
 	m.Height = 24
 
@@ -878,10 +939,10 @@ func TestViewPostsEmpty(t *testing.T) {
 func TestViewPostsContainsPostText(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Hello World", Timestamp: 1000, Reply: 5, Likenum: 10, Anonymous: true},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -904,10 +965,10 @@ func TestViewPostsContainsPostText(t *testing.T) {
 func TestViewPostsNonAnonymous(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.PostList = []models.Post{
+	m.Posts.PostList = []models.Post{
 		{Pid: 1, Text: "Real name post", Timestamp: 1000, Anonymous: false},
 	}
-	m.SelectedPostIdx = 0
+	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
 	m.Height = 24
 
@@ -921,8 +982,8 @@ func TestViewPostsNonAnonymous(t *testing.T) {
 func TestViewPostsSearchActive(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.SearchActive = true
-	m.SearchInput = "test"
+	m.Posts.SearchActive = true
+	m.Posts.SearchInput = "test"
 	m.Width = 80
 	m.Height = 24
 
@@ -939,8 +1000,8 @@ func TestViewPostsSearchActive(t *testing.T) {
 func TestViewPostsSearching(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.Searching = true
-	m.SearchInput = "hello"
+	m.Posts.Searching = true
+	m.Posts.SearchInput = "hello"
 	m.Width = 80
 	m.Height = 24
 
@@ -954,14 +1015,15 @@ func TestViewPostsSearching(t *testing.T) {
 func TestViewPostDetail(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
 		Pid: 42, Text: "Detail post text", Timestamp: 1000,
 		Reply: 5, Likenum: 10,
 	}
-	m.CommentList = []models.Comment{
+	m.Posts.CommentList = []models.Comment{
 		{Cid: 1, Text: "First comment", Timestamp: 1100, NameTag: "user1"},
 		{Cid: 2, Text: "Second comment", Timestamp: 1200, NameTag: "user2"},
+		{Cid: 3, Text: "Reply comment", Timestamp: 1300, NameTag: "user3", Quote: &models.Comment{NameTag: "quoted_user", Text: "quoted text"}},
 	}
 	m.Width = 80
 	m.Height = 24
@@ -980,6 +1042,12 @@ func TestViewPostDetail(t *testing.T) {
 	if !containsStr(output, "Second comment") {
 		t.Error("View() should show second comment")
 	}
+	if !containsStr(output, "quoted_user: quoted text") {
+		t.Error("View() should show quoted comment preview")
+	}
+	if !containsStr(output, "正序") {
+		t.Error("View() should show comment sort status")
+	}
 	if !containsStr(output, "Esc") {
 		t.Error("View() should show Esc hint")
 	}
@@ -988,9 +1056,9 @@ func TestViewPostDetail(t *testing.T) {
 func TestViewPostDetailEmptyComments(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
-	m.ShowPostDetail = true
-	m.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
-	m.CommentList = nil
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
+	m.Posts.CommentList = nil
 	m.Width = 80
 	m.Height = 24
 
@@ -1004,10 +1072,11 @@ func TestViewPostDetailEmptyComments(t *testing.T) {
 func TestViewConfigDialog(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
-	m.ConfigUsername = "testuser"
-	m.ConfigPassword = "secret"
-	m.ConfigSecretKey = "KEY123"
+	m.ConfigDialog = NewConfigDialog(&config.Config{
+		Username:  "testuser",
+		Password:  "secret",
+		SecretKey: "KEY123",
+	})
 	m.Width = 80
 	m.Height = 24
 
@@ -1027,8 +1096,7 @@ func TestViewConfigDialog(t *testing.T) {
 func TestViewConfigDialogMaskedPassword(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigFieldIdx = 0
-	m.ConfigPassword = "mypassword"
+	m.ConfigDialog = NewConfigDialog(&config.Config{Password: "mypassword"})
 	m.Width = 80
 	m.Height = 24
 
@@ -1065,8 +1133,7 @@ func TestViewHelpDialog(t *testing.T) {
 func TestViewLogsDialog(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogLogs
-	m.LogLines = []string{"2024-01-01 INFO: started", "2024-01-01 INFO: done"}
-	m.LogOffset = 0
+	m.LogsDialog.SetLines([]string{"2024-01-01 INFO: started", "2024-01-01 INFO: done"})
 	m.Width = 80
 	m.Height = 24
 
@@ -1083,7 +1150,7 @@ func TestViewLogsDialog(t *testing.T) {
 func TestViewLogsDialogEmpty(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogLogs
-	m.LogLines = nil
+	m.LogsDialog.SetLines(nil)
 	m.Width = 80
 	m.Height = 24
 
