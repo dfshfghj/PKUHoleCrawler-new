@@ -25,6 +25,9 @@ const (
 	DialogConfig
 	DialogLogs
 	DialogHelp
+	DialogSessionPrompt
+	DialogComposer
+	DialogTags
 )
 
 type CrawlerState int
@@ -73,37 +76,57 @@ type LoginMsg struct {
 }
 
 type LoadPostsMsg struct {
-	Posts   []models.Post
-	Cursor  int
-	HasMore bool
-	Error   error
+	Posts         []models.Post
+	RequestCursor int
+	NextCursor    int
+	HasMore       bool
+	Error         error
 }
 
 type LoadCommentsMsg struct {
-	Comments []models.Comment
-	Cursor   int32
-	HasMore  bool
-	SortAsc  bool
-	Error    error
+	Comments      []models.Comment
+	RequestCursor int32
+	NextCursor    int32
+	HasMore       bool
+	SortAsc       bool
+	Error         error
 }
 
 type SearchPostsMsg struct {
-	Posts   []models.Post
-	Cursor  int
-	HasMore bool
-	Error   error
+	Posts         []models.Post
+	RequestCursor int
+	NextCursor    int
+	HasMore       bool
+	Error         error
 }
 
 type LoadPostDetailMsg struct {
-	Post     *models.Post
-	Comments []models.Comment
-	HasMore  bool
-	SortAsc  bool
-	Error    error
+	Post       *models.Post
+	Comments   []models.Comment
+	NextCursor int32
+	HasMore    bool
+	SortAsc    bool
+	Error      error
 }
 
 type LoadLogsMsg struct {
 	Lines []string
+	Error error
+}
+
+type SessionRefreshMsg struct {
+	State SessionState
+	Error error
+}
+
+type ActionResultMsg struct {
+	Kind    string
+	Message string
+	Error   error
+}
+
+type LoadTagsMsg struct {
+	Tags  []models.Tag
 	Error error
 }
 
@@ -123,6 +146,31 @@ const (
 	CrawlMonitor
 )
 
+type SessionMode int
+
+const (
+	SessionModeOffline SessionMode = iota
+	SessionModeOnline
+)
+
+type SessionFailureReason int
+
+const (
+	SessionFailureReasonNone SessionFailureReason = iota
+	SessionFailureReasonLogin
+	SessionFailureReasonNetwork
+)
+
+type SessionState struct {
+	Mode               SessionMode
+	HasSession         bool
+	CanReadOnline      bool
+	CanWriteOnline     bool
+	FailureReason      SessionFailureReason
+	Message            string
+	LastFallbackReason string
+}
+
 type Model struct {
 	Page      Page
 	Width     int
@@ -135,39 +183,67 @@ type Model struct {
 	Database *db.Database
 	Client   *client.Client
 	Config   *config.Config
+	Provider PostsProvider
+	Session  SessionState
 
 	Posts PostsPageModel
 
-	ConfigDialog ConfigDialogModel
-	LogsDialog   LogsDialogModel
+	ConfigDialog  ConfigDialogModel
+	LogsDialog    LogsDialogModel
+	SessionDialog SessionPromptDialogModel
+	Composer      ComposerDialogModel
+	TagsDialog    TagsDialogModel
 
 	LastError string
 	Capture   *CaptureSink
 }
 
-func NewModel(database *db.Database, client *client.Client, cfg *config.Config) Model {
+func NewModel(database *db.Database, client *client.Client, cfg *config.Config, session SessionState) Model {
 	applyTheme("")
 
+	var provider PostsProvider = NewOfflinePostsProvider(database)
+	if session.CanReadOnline {
+		session.Mode = SessionModeOnline
+		provider = NewOnlinePostsProvider(client)
+	} else {
+		session.Mode = SessionModeOffline
+	}
+
+	dialog := DialogNone
+	sessionDialog := NewSessionPromptDialog(session)
+	if session.FailureReason != SessionFailureReasonNone {
+		dialog = DialogSessionPrompt
+	}
+
 	return Model{
-		Page:         PagePosts,
-		TabCursor:    1,
-		Dialog:       DialogNone,
-		Home:         NewHomePageModel(),
-		Database:     database,
-		Client:       client,
-		Config:       cfg,
-		Posts:        NewPostsPageModel(),
-		ConfigDialog: NewConfigDialog(cfg),
-		LogsDialog:   NewLogsDialog(),
+		Page:          PagePosts,
+		TabCursor:     1,
+		Dialog:        dialog,
+		Home:          NewHomePageModel(),
+		Database:      database,
+		Client:        client,
+		Config:        cfg,
+		Provider:      provider,
+		Session:       session,
+		Posts:         NewPostsPageModel(),
+		ConfigDialog:  NewConfigDialog(cfg),
+		LogsDialog:    NewLogsDialog(),
+		SessionDialog: sessionDialog,
+		Composer:      NewComposerDialog(),
+		TagsDialog:    NewTagsDialog(),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
+	username := ""
+	if m.Config != nil {
+		username = m.Config.Username
+	}
 	return tea.Batch(
 		func() tea.Msg {
-			return LoginMsg{Username: m.Config.Username}
+			return LoginMsg{Username: username}
 		},
-		loadPostsCmd(m.Database, 0, m.Posts.PostPerPage),
+		loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID),
 		tickCmd(),
 	)
 }
@@ -184,6 +260,15 @@ func (m *Model) ensureDialogModels() {
 	}
 	if !m.LogsDialog.initialized() {
 		m.LogsDialog = NewLogsDialog()
+	}
+	if !m.SessionDialog.initialized() {
+		m.SessionDialog = NewSessionPromptDialog(m.Session)
+	}
+	if !m.Composer.initialized() {
+		m.Composer = NewComposerDialog()
+	}
+	if !m.TagsDialog.initialized() {
+		m.TagsDialog = NewTagsDialog()
 	}
 	m.Posts.ensureInitialized()
 }

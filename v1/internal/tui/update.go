@@ -3,8 +3,10 @@ package tui
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"treehole/internal/client"
@@ -56,8 +58,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, crawlMonitorCmd(m.Client, m.Database, m.Home.MonitorPages)
 				}
 				return m, crawlPageCmd(m.Client, m.Database, msg.Page+1)
-			} else {
-				log.Printf("[Crawler] 爬虫已停止，最终抓取到第 %d 页", msg.Page)
 			}
 		}
 		return m, nil
@@ -65,13 +65,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LoadPostsMsg:
 		m.Posts.PostListLoading = false
 		if msg.Error != nil {
-			log.Printf("[Posts] 加载帖子列表失败: %v", msg.Error)
 			m.Posts.PostListError = msg.Error.Error()
+			m.handleOnlineReadFailure(msg.Error)
 		} else {
-			log.Printf("[Posts] 加载 %d 条帖子", len(msg.Posts))
 			m.Posts.PostListError = ""
 			if !m.Posts.SearchActive {
-				if msg.Cursor == 0 {
+				if msg.RequestCursor == 0 {
 					m.Posts.PostList = msg.Posts
 					m.Posts.SelectedPostIdx = 0
 					m.Posts.CursorLine = 0
@@ -82,7 +81,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Posts.PostsMode = PostsModeList
 			}
 			m.Posts.PostListTotal = len(m.Posts.PostList)
-			m.Posts.PostListCursor = nextPostCursor(msg.Posts)
+			m.Posts.PostListCursor = msg.NextCursor
 			m.Posts.PostListHasMore = msg.HasMore
 		}
 		m.syncPostsPage()
@@ -91,18 +90,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case LoadCommentsMsg:
 		m.Posts.CommentListLoading = false
 		if msg.Error != nil {
-			log.Printf("[Posts] 加载评论失败: %v", msg.Error)
 			m.Posts.CommentListError = msg.Error.Error()
+			m.handleOnlineReadFailure(msg.Error)
 		} else {
-			log.Printf("[Posts] 加载 %d 条评论", len(msg.Comments))
 			m.Posts.CommentListError = ""
-			if msg.Cursor == 0 {
+			if msg.RequestCursor == 0 {
 				m.Posts.CommentList = msg.Comments
 				m.Posts.CommentViewport.GotoTop()
 			} else {
 				m.Posts.CommentList = append(m.Posts.CommentList, msg.Comments...)
 			}
-			m.Posts.CommentListCursor = nextCommentCursor(msg.Comments)
+			m.Posts.CommentListCursor = msg.NextCursor
 			m.Posts.CommentListHasMore = msg.HasMore
 			m.Posts.CommentSortAsc = msg.SortAsc
 		}
@@ -113,10 +111,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Posts.PostListLoading = false
 		if msg.Error != nil {
 			m.Posts.PostListError = msg.Error.Error()
+			m.handleOnlineReadFailure(msg.Error)
 		} else {
-			log.Printf("[Posts] 搜索加载 %d 条帖子", len(msg.Posts))
 			m.Posts.PostListError = ""
-			if msg.Cursor == 0 {
+			if msg.RequestCursor == 0 {
 				m.Posts.PostList = msg.Posts
 				m.Posts.SelectedPostIdx = 0
 				m.Posts.CursorLine = 0
@@ -125,7 +123,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.Posts.PostList = append(m.Posts.PostList, msg.Posts...)
 			}
 			m.Posts.PostListTotal = len(m.Posts.PostList)
-			m.Posts.PostListCursor = nextPostCursor(msg.Posts)
+			m.Posts.PostListCursor = msg.NextCursor
 			m.Posts.PostListHasMore = msg.HasMore
 			m.Posts.SearchActive = true
 			m.Posts.Searching = false
@@ -138,11 +136,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Posts.CommentListLoading = false
 		if msg.Error != nil {
 			m.Posts.CommentListError = msg.Error.Error()
+			m.handleOnlineReadFailure(msg.Error)
 		} else {
 			m.Posts.CommentListError = ""
 			m.Posts.CurrentPost = msg.Post
 			m.Posts.CommentList = msg.Comments
-			m.Posts.CommentListCursor = nextCommentCursor(msg.Comments)
+			m.Posts.CommentListCursor = msg.NextCursor
 			m.Posts.CommentListHasMore = msg.HasMore
 			m.Posts.CommentSortAsc = msg.SortAsc
 			m.Posts.commentContent = ""
@@ -176,14 +175,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ConfigDialog.SetSaveResult(nil)
 		}
 		return m, nil
+
+	case SessionRefreshMsg:
+		m.applySessionState(msg.State)
+		if msg.State.FailureReason != SessionFailureReasonNone {
+			m.SessionDialog.ApplyState(msg.State)
+			m.Dialog = DialogSessionPrompt
+		} else if m.Dialog == DialogSessionPrompt {
+			m.Dialog = DialogNone
+		}
+		if msg.Error == nil && msg.State.CanReadOnline {
+			m.Posts.resetList()
+			m.Posts.PostListLoading = true
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+		}
+		return m, nil
+
+	case ActionResultMsg:
+		if msg.Error != nil {
+			m.LastError = msg.Error.Error()
+			if m.Dialog == DialogComposer {
+				m.Composer.SetError(msg.Error)
+				return m, nil
+			}
+		} else {
+			m.LastError = ""
+			m.Dialog = DialogNone
+			m.Posts.StatusText = msg.Message
+			if msg.Kind == "post" {
+				m.Posts.resetList()
+				m.Posts.PostListLoading = true
+				return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+			}
+			if m.Posts.CurrentPost != nil {
+				m.Posts.CommentListLoading = true
+				return m, loadPostDetailCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc)
+			}
+		}
+		return m, nil
+
+	case LoadTagsMsg:
+		if msg.Error != nil {
+			m.TagsDialog.SetError(msg.Error)
+			m.LastError = msg.Error.Error()
+		} else {
+			m.TagsDialog.SetTags(msg.Tags)
+		}
+		return m, nil
 	}
 
 	return m, nil
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	// Dialog close
-	if msg.String() == "esc" && m.Dialog != DialogNone {
+	if msg.String() == "esc" && m.Dialog != DialogNone && m.Dialog != DialogSessionPrompt {
 		m.Dialog = DialogNone
 		return m, nil
 	}
@@ -192,19 +237,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Open dialogs
 	if m.Dialog == DialogNone && !m.Posts.Searching && !m.Posts.ShowPostDetail {
-		if msg.String() == "c" {
+		switch msg.String() {
+		case "c":
 			m.Dialog = DialogConfig
 			m.ConfigDialog = NewConfigDialog(m.Config)
 			return m, loadConfigCmd()
-		}
-		if msg.String() == "l" {
+		case "l":
 			m.Dialog = DialogLogs
 			m.LogsDialog.SetLoading(true)
 			return m, loadLogsCmd()
-		}
-		if msg.String() == "h" {
+		case "h":
 			m.Dialog = DialogHelp
 			return m, nil
 		}
@@ -215,22 +258,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Page = Page(m.TabCursor)
 		if m.Page == PagePosts && len(m.Posts.PostList) == 0 {
 			m.Posts.PostListLoading = true
-			return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 		}
 		m.syncPostsPage()
 		return m, nil
 	}
 
-	// Route to page handlers when no dialog
-	if m.Dialog == DialogNone {
-		switch m.Page {
-		case PageHome:
-			return m.handleHomeKey(msg)
-		case PagePosts:
-			return m.handlePostsKey(msg)
-		}
-	} else {
-		// Dialog handlers
+	if m.Dialog != DialogNone {
 		switch m.Dialog {
 		case DialogConfig:
 			return m.handleConfigKey(msg)
@@ -238,9 +272,21 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m.handleLogsKey(msg)
 		case DialogHelp:
 			return m, nil
+		case DialogSessionPrompt:
+			return m.handleSessionDialogKey(msg)
+		case DialogComposer:
+			return m.handleComposerKey(msg)
+		case DialogTags:
+			return m.handleTagsDialogKey(msg)
 		}
 	}
 
+	switch m.Page {
+	case PageHome:
+		return m.handleHomeKey(msg)
+	case PagePosts:
+		return m.handlePostsKey(msg)
+	}
 	return m, nil
 }
 
@@ -248,7 +294,6 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	action := m.Home.Update(msg)
 	switch action {
 	case HomeActionStartCrawler:
-		log.Printf("[Crawler] 爬虫已启动, 模式: %v", m.Home.CrawlMode)
 		if m.Home.CrawlMode == CrawlMonitor {
 			return m, crawlMonitorCmd(m.Client, m.Database, m.Home.MonitorPages)
 		}
@@ -268,7 +313,7 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			if m.Posts.SearchInput != "" {
 				m.Posts.PostListLoading = true
 				m.Posts.PostsMode = PostsModeSearchInput
-				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, 0, m.Posts.PostPerPage)
+				return m, searchPostsCmd(m.Provider, m.Posts.SearchInput, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 			}
 			return m, nil
 		case tea.KeyBackspace:
@@ -314,13 +359,39 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				nextSortAsc := !m.Posts.CommentSortAsc
 				m.Posts.resetComments()
 				m.Posts.CommentListLoading = true
-				return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, nextSortAsc, 0)
+				return m, loadCommentsCmd(m.Provider, m.Posts.CurrentPost.Pid, nextSortAsc, 0)
 			}
 		case "r":
 			if m.Posts.CurrentPost != nil {
 				m.Posts.CommentListLoading = true
 				m.Posts.CommentListError = ""
-				return m, loadPostDetailCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc)
+				return m, loadPostDetailCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc)
+			}
+		case "p":
+			if m.Posts.CurrentPost != nil {
+				if !m.Posts.CanWrite {
+					m.setWriteUnavailableStatus()
+					return m, nil
+				}
+				return m, togglePraiseCmd(m.Provider, m.Posts.CurrentPost.Pid)
+			}
+		case "f":
+			if m.Posts.CurrentPost != nil {
+				if !m.Posts.CanWrite {
+					m.setWriteUnavailableStatus()
+					return m, nil
+				}
+				return m, toggleAttentionCmd(m.Provider, m.Posts.CurrentPost.Pid)
+			}
+		case "c":
+			if m.Posts.CurrentPost != nil {
+				if !m.Posts.CanWrite {
+					m.setWriteUnavailableStatus()
+					return m, nil
+				}
+				m.Composer.Configure(ComposerModeComment)
+				m.Dialog = DialogComposer
+				return m, nil
 			}
 		case "up":
 			if m.Posts.DetailFocus == DetailFocusPost {
@@ -335,7 +406,7 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.Posts.CommentViewport.ScrollDown(1)
 				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
 					m.Posts.CommentListLoading = true
-					return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
+					return m, loadCommentsCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
 				}
 			}
 		case "pgup":
@@ -351,7 +422,7 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.Posts.CommentViewport.PageDown()
 				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
 					m.Posts.CommentListLoading = true
-					return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
+					return m, loadCommentsCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
 				}
 			}
 		}
@@ -368,13 +439,26 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if !m.Posts.SearchActive {
 			m.Posts.PostListLoading = true
 			m.Posts.resetList()
-			return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 		}
-		return m, nil
 	case "/":
 		m.Posts.Searching = true
 		m.Posts.PostsMode = PostsModeSearchInput
 		m.Posts.SearchInput = ""
+		return m, nil
+	case "t":
+		m.Dialog = DialogTags
+		if len(m.TagsDialog.tags) == 0 && m.Provider.Mode() == SessionModeOnline {
+			return m, loadTagsCmd(m.Provider)
+		}
+		return m, nil
+	case "n":
+		if !m.Posts.CanWrite {
+			m.setWriteUnavailableStatus()
+			return m, nil
+		}
+		m.Composer.Configure(ComposerModePost)
+		m.Dialog = DialogComposer
 		return m, nil
 	case "up":
 		m.Posts.moveCursor(-1)
@@ -383,9 +467,9 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.Posts.shouldPrefetchMore() {
 			m.Posts.PostListLoading = true
 			if m.Posts.SearchActive {
-				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage)
+				return m, searchPostsCmd(m.Provider, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 			}
-			return m, loadPostsCmd(m.Database, m.Posts.PostListCursor, m.Posts.PostPerPage)
+			return m, loadPostsCmd(m.Provider, m.Posts.PostListCursor, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 		}
 	case "enter":
 		if len(m.Posts.PostList) > 0 && m.Posts.SelectedPostIdx < len(m.Posts.PostList) {
@@ -398,20 +482,18 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.Posts.PostBodyViewport.GotoTop()
 			m.Posts.DetailFocus = DetailFocusComments
 			m.syncPostsPage()
-			return m, loadCommentsCmd(m.Database, post.Pid, true, 0)
+			return m, loadPostDetailCmd(m.Provider, post.Pid, true)
 		}
 	case "pgup":
 		m.Posts.pageMove(-1)
 	case "pgdown":
 		m.Posts.pageMove(1)
-		if m.Posts.shouldPrefetchMore() &&
-			m.Posts.PostListHasMore &&
-			!m.Posts.PostListLoading {
+		if m.Posts.shouldPrefetchMore() && m.Posts.PostListHasMore && !m.Posts.PostListLoading {
 			m.Posts.PostListLoading = true
 			if m.Posts.SearchActive {
-				return m, searchPostsCmd(m.Database, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage)
+				return m, searchPostsCmd(m.Provider, m.Posts.SearchInput, m.Posts.PostListCursor, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 			}
-			return m, loadPostsCmd(m.Database, m.Posts.PostListCursor, m.Posts.PostPerPage)
+			return m, loadPostsCmd(m.Provider, m.Posts.PostListCursor, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 		}
 	}
 	m.syncPostsPage()
@@ -437,10 +519,20 @@ func (m Model) clearSearchResults() (Model, tea.Cmd) {
 	m.Posts.PostListLoading = true
 	m.Posts.resetList()
 	m.syncPostsPage()
-	return m, loadPostsCmd(m.Database, 0, m.Posts.PostPerPage)
+	return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 }
 
 func (m *Model) syncPostsPage() {
+	m.Posts.SessionMode = m.Session.Mode
+	m.Posts.CanWrite = m.Session.CanWriteOnline && m.Session.Mode == SessionModeOnline
+	if m.Posts.StatusText == "" {
+		switch m.Session.Mode {
+		case SessionModeOnline:
+			m.Posts.StatusText = "当前为在线模式"
+		default:
+			m.Posts.StatusText = "当前为离线模式"
+		}
+	}
 	m.Posts.syncViewports(m.Width, m.contentAreaHeightForSize(m.Width, m.Height))
 }
 
@@ -466,119 +558,192 @@ func (m Model) handleLogsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) handleSessionDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Type == tea.KeyEscape {
+		m.Dialog = DialogNone
+		return m, nil
+	}
+	if msg.Type == tea.KeyEnter {
+		switch m.SessionDialog.SelectedOption() {
+		case "重新登录":
+			return m, refreshSessionCmd(m.Client, m.Config)
+		case "进入离线模式", "确定":
+			m.forceOfflineMode(m.Session.Message)
+			m.Dialog = DialogNone
+			m.Posts.PostListLoading = true
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, 0)
+		}
+	}
+	m.SessionDialog.Update(msg)
+	return m, nil
+}
+
+func (m Model) handleComposerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Type == tea.KeyEscape {
+		m.Dialog = DialogNone
+		return m, nil
+	}
+	if msg.Type == tea.KeyEnter {
+		text := m.Composer.Value()
+		if text == "" {
+			m.Composer.SetError(errors.New("内容不能为空"))
+			return m, nil
+		}
+		if m.Composer.Mode() == ComposerModeComment && m.Posts.CurrentPost != nil {
+			return m, createCommentCmd(m.Provider, m.Posts.CurrentPost.Pid, text)
+		}
+		return m, createPostCmd(m.Provider, text)
+	}
+	cmd := m.Composer.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleTagsDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Type == tea.KeyEscape {
+		m.Dialog = DialogNone
+		return m, nil
+	}
+	switch msg.String() {
+	case "c":
+		m.Posts.ActiveTagID = 0
+		m.Posts.ActiveTag = ""
+		m.Dialog = DialogNone
+		m.Posts.PostListLoading = true
+		return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, 0)
+	case "enter":
+		tag := m.TagsDialog.SelectedTag()
+		if tag != nil {
+			m.Posts.SearchActive = false
+			m.Posts.Searching = false
+			m.Posts.SearchInput = ""
+			m.Posts.ActiveTagID = tag.ID
+			m.Posts.ActiveTag = tag.Label
+			if m.Posts.ActiveTag == "" {
+				m.Posts.ActiveTag = tag.Name
+			}
+			m.Dialog = DialogNone
+			m.Posts.PostListLoading = true
+			m.Posts.resetList()
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+		}
+	}
+	m.TagsDialog.Update(msg)
+	return m, nil
+}
+
 func crawlPageCmd(c *client.Client, database *db.Database, page int) tea.Cmd {
 	return func() tea.Msg {
-		log.Printf("[Crawler] 开始抓取第 %d 页", page)
 		startTime := time.Now()
-		result, err := crawler.FetchAndSave(c, database, page, false, 200, 200, false, false)
+		_, err := crawler.FetchAndSave(c, database, page, false, 200, 200, false, false)
 		duration := time.Since(startTime)
-
 		if err != nil {
-			log.Printf("[Crawler] 第 %d 页抓取失败: %v (耗时 %v)", page, err, duration)
 			return CrawlMsg{Error: err, Page: page}
 		}
-
-		log.Printf("[Crawler] 第 %d 页抓取完成: %d 条帖子, %d 条评论 (耗时 %v)", page, result.PostCount, result.CommentCount, duration)
-
-		return CrawlMsg{
-			Page:     page,
-			Duration: duration,
-		}
+		return CrawlMsg{Page: page, Duration: duration}
 	}
 }
 
 func crawlMonitorCmd(c *client.Client, database *db.Database, monitorPages int) tea.Cmd {
 	return func() tea.Msg {
 		startTime := time.Now()
-		totalPosts := 0
-		totalComments := 0
-
 		for page := 1; page <= monitorPages; page++ {
-			result, err := crawler.FetchAndSave(c, database, page, false, 200, 200, false, false)
+			_, err := crawler.FetchAndSave(c, database, page, false, 200, 200, false, false)
 			if err != nil {
 				log.Printf("[Crawler] 监控模式第 %d 页抓取失败: %v", page, err)
-				continue
 			}
-			totalPosts += result.PostCount
-			totalComments += result.CommentCount
-
-			log.Printf("[Crawler] 监控第 %d 页完成: +%d帖子 +%d评论", page, result.PostCount, result.CommentCount)
 		}
-
-		duration := time.Since(startTime)
-
-		return CrawlMsg{
-			Page:     monitorPages,
-			Duration: duration,
-		}
+		return CrawlMsg{Page: monitorPages, Duration: time.Since(startTime)}
 	}
 }
 
-func loadPostsCmd(database *db.Database, cursor, limit int) tea.Cmd {
+func loadPostsCmd(provider PostsProvider, cursor, limit, label int) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := database.GetPostsCursor(cursor, limit, false)
+		posts, nextCursor, hasMore, err := provider.ListPosts(cursor, limit, label, "")
 		if err != nil {
 			return LoadPostsMsg{Error: err}
 		}
-		return LoadPostsMsg{
-			Posts:   posts,
-			Cursor:  cursor,
-			HasMore: len(posts) == limit,
-		}
+		return LoadPostsMsg{Posts: posts, RequestCursor: cursor, NextCursor: nextCursor, HasMore: hasMore}
 	}
 }
 
-func loadCommentsCmd(database *db.Database, pid int32, sortAsc bool, cursor ...int32) tea.Cmd {
+func loadCommentsCmd(provider PostsProvider, pid int32, sortAsc bool, cursor ...int32) tea.Cmd {
 	return func() tea.Msg {
-		const batchSize = 50
 		begin := int32(0)
 		if len(cursor) > 0 {
 			begin = cursor[0]
 		}
-		comments, err := database.GetCommentsByPidCursor(pid, begin, batchSize, sortAsc)
+		comments, next, hasMore, err := provider.ListComments(pid, sortAsc, begin)
 		if err != nil {
 			return LoadCommentsMsg{Error: err}
 		}
-		return LoadCommentsMsg{
-			Comments: comments,
-			Cursor:   begin,
-			HasMore:  len(comments) == batchSize,
-			SortAsc:  sortAsc,
-		}
+		return LoadCommentsMsg{Comments: comments, RequestCursor: begin, NextCursor: next, HasMore: hasMore, SortAsc: sortAsc}
 	}
 }
 
-func loadPostDetailCmd(database *db.Database, pid int32, sortAsc bool) tea.Cmd {
+func loadPostDetailCmd(provider PostsProvider, pid int32, sortAsc bool) tea.Cmd {
 	return func() tea.Msg {
-		post, err := database.GetPostByPid(pid)
+		post, comments, next, hasMore, err := provider.GetPostDetail(pid, sortAsc)
 		if err != nil {
 			return LoadPostDetailMsg{Error: err}
 		}
-		const batchSize = 50
-		comments, err := database.GetCommentsByPidCursor(pid, 0, batchSize, sortAsc)
-		if err != nil {
-			return LoadPostDetailMsg{Error: err}
-		}
-		return LoadPostDetailMsg{
-			Post:     post,
-			Comments: comments,
-			HasMore:  len(comments) == batchSize,
-			SortAsc:  sortAsc,
-		}
+		return LoadPostDetailMsg{Post: post, Comments: comments, NextCursor: next, HasMore: hasMore, SortAsc: sortAsc}
 	}
 }
 
-func searchPostsCmd(database *db.Database, keyword string, cursor, limit int) tea.Cmd {
+func searchPostsCmd(provider PostsProvider, keyword string, cursor, limit, label int) tea.Cmd {
 	return func() tea.Msg {
-		posts, err := database.SearchPostsCursor(keyword, cursor, limit, false)
+		posts, nextCursor, hasMore, err := provider.SearchPosts(keyword, cursor, limit, label)
 		if err != nil {
 			return SearchPostsMsg{Error: err}
 		}
-		return SearchPostsMsg{
-			Posts:   posts,
-			Cursor:  cursor,
-			HasMore: len(posts) == limit,
+		return SearchPostsMsg{Posts: posts, RequestCursor: cursor, NextCursor: nextCursor, HasMore: hasMore}
+	}
+}
+
+func loadTagsCmd(provider PostsProvider) tea.Cmd {
+	return func() tea.Msg {
+		tags, err := provider.ListTags()
+		return LoadTagsMsg{Tags: tags, Error: err}
+	}
+}
+
+func togglePraiseCmd(provider PostsProvider, pid int32) tea.Cmd {
+	return func() tea.Msg {
+		err := provider.TogglePraise(pid)
+		if err != nil {
+			return ActionResultMsg{Kind: "praise", Error: err}
 		}
+		return ActionResultMsg{Kind: "praise", Message: "点赞状态已刷新"}
+	}
+}
+
+func toggleAttentionCmd(provider PostsProvider, pid int32) tea.Cmd {
+	return func() tea.Msg {
+		err := provider.ToggleAttention(pid)
+		if err != nil {
+			return ActionResultMsg{Kind: "attention", Error: err}
+		}
+		return ActionResultMsg{Kind: "attention", Message: "关注状态已刷新"}
+	}
+}
+
+func createCommentCmd(provider PostsProvider, pid int32, text string) tea.Cmd {
+	return func() tea.Msg {
+		err := provider.CreateComment(pid, text)
+		if err != nil {
+			return ActionResultMsg{Kind: "comment", Error: err}
+		}
+		return ActionResultMsg{Kind: "comment", Message: "评论发布成功"}
+	}
+}
+
+func createPostCmd(provider PostsProvider, text string) tea.Cmd {
+	return func() tea.Msg {
+		err := provider.CreatePost(text)
+		if err != nil {
+			return ActionResultMsg{Kind: "post", Error: err}
+		}
+		return ActionResultMsg{Kind: "post", Message: "帖子发布成功"}
 	}
 }
 
@@ -603,21 +768,17 @@ func loadLogsCmd() tea.Cmd {
 			return LoadLogsMsg{Error: err}
 		}
 		defer file.Close()
-
 		var lines []string
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			lines = append(lines, scanner.Text())
 		}
-
 		if len(lines) > 500 {
 			lines = lines[len(lines)-500:]
 		}
-
 		for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 			lines[i], lines[j] = lines[j], lines[i]
 		}
-
 		return LoadLogsMsg{Lines: lines}
 	}
 }
@@ -643,123 +804,176 @@ func saveConfigCmd(cfg *config.Config) tea.Cmd {
 		if err != nil {
 			return SaveConfigMsg{Error: err}
 		}
-		err = os.WriteFile("config.json", data, 0644)
-		if err != nil {
+		if err := os.WriteFile("config.json", data, 0644); err != nil {
 			return SaveConfigMsg{Error: err}
 		}
 		return SaveConfigMsg{}
 	}
 }
 
-func InitClientForTUI() (*client.Client, *config.Config, error) {
-	log.Printf("[Auth] 正在初始化客户端...")
-
+func InitClientForTUI() (*client.Client, *config.Config, SessionState, error) {
 	cfg, cfgErr := config.LoadConfig()
 	deviceUUID := ""
 	if cfgErr == nil && cfg != nil {
 		deviceUUID = cfg.DeviceUUID
 	}
-
 	c, err := client.NewClient(deviceUUID)
 	if err != nil {
-		log.Printf("[Auth] 创建客户端失败: %v", err)
-		return nil, nil, err
+		return nil, nil, SessionState{}, err
 	}
+	state := attemptBootstrapSession(c, cfg)
+	if cfg == nil && cfgErr == nil {
+		cfg, _ = config.LoadConfig()
+	}
+	return c, cfg, state, nil
+}
 
-	log.Printf("[Auth] 尝试使用已有 Cookie 登录...")
-	resp, err := c.UnRead()
-	if err == nil && resp.StatusCode == 200 {
-		c.SaveCookies()
-		if cfg == nil {
-			cfg, _ = config.LoadConfig()
-		}
-		log.Printf("[Auth] Cookie 登录成功")
-		return c, cfg, nil
+func refreshSessionCmd(c *client.Client, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		return SessionRefreshMsg{State: attemptBootstrapSession(c, cfg)}
 	}
-	if resp != nil {
-		resp.Body.Close()
-	}
-	log.Printf("[Auth] Cookie 登录失败，尝试账号密码登录...")
+}
 
+func attemptBootstrapSession(c *client.Client, cfg *config.Config) SessionState {
+	status := toTUISessionState(c.ProbeSession())
+	if status.CanReadOnline {
+		_ = c.SaveCookies()
+		return status
+	}
 	if cfg == nil {
-		log.Printf("[Auth] 加载配置文件失败: %v", cfgErr)
-		return c, nil, nil
+		return status
 	}
-
-	log.Printf("[Auth] 正在执行 OAuth 登录...")
 	oauthResult, err := c.OAuthLogin(cfg.Username, cfg.Password)
 	if err != nil {
-		log.Printf("[Auth] OAuth 登录失败: %v", err)
-		return c, cfg, nil
+		status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
+		status.Message = err.Error()
+		return status
 	}
-
 	token, ok := oauthResult["token"].(string)
-	if !ok {
-		log.Printf("[Auth] 未获取到 OAuth token")
-		return c, cfg, nil
+	if !ok || token == "" {
+		status.FailureReason = SessionFailureReasonLogin
+		status.Message = "OAuth 登录未返回 token"
+		return status
 	}
-
-	log.Printf("[Auth] 正在执行 SSO 登录...")
-	err = c.SSOLogin(token)
-	if err != nil {
-		log.Printf("[Auth] SSO 登录失败: %v", err)
-		return c, cfg, nil
+	if err := c.SSOLogin(token); err != nil {
+		status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
+		status.Message = err.Error()
+		return status
 	}
-
-	log.Printf("[Auth] 正在验证登录状态...")
-	resp, err = c.UnRead()
-	if err != nil {
-		log.Printf("[Auth] 验证登录状态失败: %v", err)
-		return c, cfg, nil
+	status = toTUISessionState(c.ProbeSession())
+	if status.CanReadOnline {
+		_ = c.SaveCookies()
+		return status
 	}
-
-	var unReadResult map[string]interface{}
-	err = json.NewDecoder(resp.Body).Decode(&unReadResult)
-	resp.Body.Close()
-	if err != nil {
-		log.Printf("[Auth] 解析验证结果失败: %v", err)
-		return c, cfg, nil
-	}
-
-	if success, ok := unReadResult["success"].(bool); ok && success {
-		c.SaveCookies()
-		log.Printf("[Auth] 账号密码登录成功")
-		return c, cfg, nil
-	}
-
-	if message, ok := unReadResult["message"].(string); ok && message == "请进行令牌验证" {
-		log.Printf("[Auth] 需要 TOTP 令牌验证...")
-		totpToken, _ := totp.GenerateCode(cfg.SecretKey, time.Now())
-		resp, err = c.LoginByToken(totpToken)
+	if strings.Contains(status.Message, "令牌验证") {
+		totpToken, err := totp.GenerateCode(cfg.SecretKey, time.Now())
 		if err != nil {
-			log.Printf("[Auth] TOTP 登录失败: %v", err)
-			return c, cfg, nil
+			status.FailureReason = SessionFailureReasonLogin
+			status.Message = err.Error()
+			return status
+		}
+		resp, err := c.LoginByToken(totpToken)
+		if err != nil {
+			status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
+			status.Message = err.Error()
+			return status
 		}
 		resp.Body.Close()
-
-		log.Printf("[Auth] 正在验证 TOTP 登录状态...")
-		resp, err = c.UnRead()
-		if err != nil {
-			log.Printf("[Auth] 验证 TOTP 登录状态失败: %v", err)
-			return c, cfg, nil
+		status = toTUISessionState(c.ProbeSession())
+		if status.CanReadOnline {
+			_ = c.SaveCookies()
 		}
-
-		var finalResult map[string]interface{}
-		err = json.NewDecoder(resp.Body).Decode(&finalResult)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[Auth] 解析 TOTP 验证结果失败: %v", err)
-			return c, cfg, nil
-		}
-
-		if success, ok := finalResult["success"].(bool); ok && success {
-			c.SaveCookies()
-			log.Printf("[Auth] TOTP 令牌验证成功，登录完成")
-			return c, cfg, nil
-		}
-		log.Printf("[Auth] TOTP 令牌验证失败")
 	}
+	return status
+}
 
-	log.Printf("[Auth] 所有登录方式均失败")
-	return c, cfg, nil
+func toTUISessionState(status client.SessionStatus) SessionState {
+	state := SessionState{
+		HasSession:     status.HasSession,
+		CanReadOnline:  status.CanReadOnline,
+		CanWriteOnline: status.CanWriteOnline,
+		Message:        status.Message,
+	}
+	if status.CanReadOnline {
+		state.Mode = SessionModeOnline
+		state.LastFallbackReason = ""
+		return state
+	}
+	state.Mode = SessionModeOffline
+	state.LastFallbackReason = status.Message
+	state.FailureReason = failureReasonFromClient(status.FailureKind)
+	return state
+}
+
+func failureReasonFromClient(kind client.SessionFailureKind) SessionFailureReason {
+	switch kind {
+	case client.SessionFailureNetwork:
+		return SessionFailureReasonNetwork
+	case client.SessionFailureLogin:
+		return SessionFailureReasonLogin
+	default:
+		return SessionFailureReasonNone
+	}
+}
+
+func (m *Model) handleOnlineReadFailure(err error) {
+	if m.Provider == nil || m.Provider.Mode() != SessionModeOnline {
+		return
+	}
+	state := SessionState{
+		Mode:          SessionModeOffline,
+		FailureReason: failureReasonFromClient(client.ClassifySessionError(err)),
+		Message:       err.Error(),
+	}
+	m.SessionDialog.ApplyState(state)
+	m.Dialog = DialogSessionPrompt
+}
+
+func (m *Model) applySessionState(state SessionState) {
+	m.Session = state
+	if state.CanReadOnline {
+		m.Provider = NewOnlinePostsProvider(m.Client)
+		m.Session.Mode = SessionModeOnline
+		m.Posts.StatusText = "当前为在线模式"
+		m.Home.LoggedIn = true
+	} else {
+		m.Provider = NewOfflinePostsProvider(m.Database)
+		m.Session.Mode = SessionModeOffline
+		m.Posts.ActiveTagID = 0
+		m.Posts.ActiveTag = ""
+		if state.Message != "" {
+			m.Posts.StatusText = "离线模式：" + state.Message
+		} else {
+			m.Posts.StatusText = "当前为离线模式"
+		}
+		m.Home.LoggedIn = false
+	}
+	m.SessionDialog.ApplyState(state)
+	m.syncPostsPage()
+}
+
+func (m *Model) forceOfflineMode(reason string) {
+	m.Session.Mode = SessionModeOffline
+	m.Session.CanReadOnline = false
+	m.Session.CanWriteOnline = false
+	m.Session.LastFallbackReason = reason
+	m.Provider = NewOfflinePostsProvider(m.Database)
+	m.Posts.ActiveTagID = 0
+	m.Posts.ActiveTag = ""
+	m.Home.LoggedIn = false
+	if reason != "" {
+		m.Posts.StatusText = "离线模式：" + reason
+	} else {
+		m.Posts.StatusText = "当前为离线模式"
+	}
+	m.syncPostsPage()
+}
+
+func (m *Model) setWriteUnavailableStatus() {
+	if m.Session.Mode == SessionModeOnline {
+		m.Posts.StatusText = "当前在线会话不可写，请先重新登录或稍后再试"
+	} else {
+		m.Posts.StatusText = "当前为离线模式，写操作不可用"
+	}
+	m.syncPostsPage()
 }

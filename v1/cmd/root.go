@@ -87,12 +87,12 @@ func runTUI() error {
 	}
 	defer cleanup()
 
-	client, cfg, err := tui.InitClientForTUI()
+	client, cfg, session, err := tui.InitClientForTUI()
 	if err != nil {
 		return fmt.Errorf("初始化客户端失败: %w", err)
 	}
 
-	model := tui.NewModel(database, client, cfg)
+	model := tui.NewModel(database, client, cfg, session)
 	opts := []tea.ProgramOption{tea.WithAltScreen()}
 
 	capture, err := tui.NewCaptureSink(tuiCaptureDir)
@@ -124,7 +124,7 @@ func runDaemon() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	client, _, err := tui.InitClientForTUI()
+	client, _, _, err := tui.InitClientForTUI()
 	if err != nil {
 		return fmt.Errorf("初始化客户端失败: %w", err)
 	}

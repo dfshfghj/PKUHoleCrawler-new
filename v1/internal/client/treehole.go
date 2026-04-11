@@ -107,6 +107,16 @@ func (c *Client) GetPkuToken() string {
 	return ""
 }
 
+func (c *Client) GetXSRFToken() string {
+	cookies := c.httpClient.Jar.Cookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"})
+	for _, cookie := range cookies {
+		if cookie.Name == "XSRF-TOKEN" {
+			return cookie.Value
+		}
+	}
+	return ""
+}
+
 func (c *Client) SetPkuToken(token string) {
 	cookie := &http.Cookie{
 		Name:   "pku_token",
@@ -115,6 +125,21 @@ func (c *Client) SetPkuToken(token string) {
 		Path:   "/",
 	}
 	c.httpClient.Jar.SetCookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"}, []*http.Cookie{cookie})
+}
+
+func (c *Client) applyTreeholeHeaders(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if c.deviceUUID != "" {
+		req.Header.Set("uuid", c.deviceUUID)
+	}
+	if c.authorization != "" {
+		req.Header.Set("Authorization", "Bearer "+c.authorization)
+	}
+	if token := c.GetXSRFToken(); token != "" {
+		req.Header.Set("x-xsrf-token", token)
+	}
 }
 
 func (c *Client) OAuthLogin(username, password string) (map[string]interface{}, error) {
@@ -154,7 +179,13 @@ func (c *Client) SSOLogin(token string) error {
 	params.Set("token", token)
 
 	reqURL := string(SSO_LOGIN) + "?" + params.Encode()
-	resp, err := c.httpClient.Get(reqURL)
+	req, err := http.NewRequest("GET", reqURL, nil)
+	if err != nil {
+		return err
+	}
+	c.applyTreeholeHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -182,9 +213,7 @@ func (c *Client) UnRead() (*http.Response, error) {
 		return nil, err
 	}
 
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -198,6 +227,7 @@ func (c *Client) LoginByToken(token string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -211,6 +241,7 @@ func (c *Client) LoginByMessage(code string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -220,6 +251,7 @@ func (c *Client) SendMessage() (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -230,10 +262,7 @@ func (c *Client) GetPost(postID int) (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -266,10 +295,7 @@ func (c *Client) GetComment(postID, page, limit int, sort string) (map[string]in
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -306,10 +332,7 @@ func (c *Client) Search(keyword string, page, limit int, label interface{}) (*ht
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -320,10 +343,7 @@ func (c *Client) Follow(postID int) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -338,10 +358,7 @@ func (c *Client) GetFollow(page, limit int) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -359,10 +376,7 @@ func (c *Client) Comment(postID int, text string, commentID *int) (*http.Respons
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -393,10 +407,7 @@ func (c *Client) Report(tp string, xid int, other, reason string) (*http.Respons
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -406,10 +417,7 @@ func (c *Client) GetCourseTable() (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -419,10 +427,7 @@ func (c *Client) GetGrade() (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -514,12 +519,7 @@ func (c *Client) GetPostsList(page, limit, commentLimit, commentStream int) (*ht
 	if err != nil {
 		return nil, err
 	}
-
-	req.Header.Set("uuid", c.deviceUUID)
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }
@@ -537,10 +537,7 @@ func (c *Client) GetCommentsByPid(pid, page, limit, sort, commentStream int) (*h
 	if err != nil {
 		return nil, err
 	}
-
-	if c.authorization != "" {
-		req.Header.Set("Authorization", "Bearer "+c.authorization)
-	}
+	c.applyTreeholeHeaders(req)
 
 	return c.httpClient.Do(req)
 }

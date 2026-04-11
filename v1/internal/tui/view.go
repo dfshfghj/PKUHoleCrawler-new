@@ -126,6 +126,12 @@ func (m Model) renderDialog() string {
 		return m.renderLogsDialog()
 	case DialogHelp:
 		return m.renderHelpDialog()
+	case DialogSessionPrompt:
+		return m.renderDialogCard(m.SessionDialog.View(m.Width))
+	case DialogComposer:
+		return m.renderDialogCard(m.Composer.View(m.Width))
+	case DialogTags:
+		return m.renderDialogCard(m.TagsDialog.View(m.Width))
 	default:
 		return ""
 	}

@@ -46,7 +46,7 @@ func newFetchImagesCmd() *cobra.Command {
 			}
 			defer cleanup()
 
-			client, _, err := tui.InitClientForTUI()
+			client, _, _, err := tui.InitClientForTUI()
 			if err != nil {
 				return err
 			}

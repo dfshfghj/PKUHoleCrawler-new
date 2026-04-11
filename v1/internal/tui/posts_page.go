@@ -42,6 +42,11 @@ type PostsPageModel struct {
 	Searching    bool
 	SearchInput  string
 	SearchActive bool
+	ActiveTagID  int
+	ActiveTag    string
+	SessionMode  SessionMode
+	CanWrite     bool
+	StatusText   string
 }
 
 func NewPostsPageModel() PostsPageModel {
@@ -125,9 +130,23 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	if p.SearchActive {
 		b.WriteString(vTitleStyle.Render(fmt.Sprintf("搜索结果: %s", p.SearchInput)))
 	} else {
-		b.WriteString(vTitleStyle.Render("帖子列表"))
+		title := "帖子列表"
+		switch p.SessionMode {
+		case SessionModeOnline:
+			title += " [在线]"
+		default:
+			title += " [离线]"
+		}
+		if p.ActiveTag != "" {
+			title += " #" + p.ActiveTag
+		}
+		b.WriteString(vTitleStyle.Render(title))
 	}
 	b.WriteString("\n")
+	if p.StatusText != "" {
+		b.WriteString(vStatLabelStyle.Render(p.StatusText))
+		b.WriteString("\n")
+	}
 
 	pageWidth := maxInt(20, width-8)
 	searchLabel := "按 / 搜索"
@@ -164,7 +183,11 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	}
 	b.WriteString(vp.View())
 	b.WriteString("\n")
-	status := fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", len(p.PostList))
+	postAction := "n: 发帖"
+	if !p.CanWrite {
+		postAction = "n: 发帖(不可用)"
+	}
+	status := fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | t: 标签 | %s | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", postAction, len(p.PostList))
 	if p.PostListLoading {
 		status += " | 正在加载更多..."
 	}
@@ -692,7 +715,15 @@ func (p PostsPageModel) detailHeaderPlain() string {
 		return ""
 	}
 	ts := time.Unix(int64(p.CurrentPost.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
-	return fmt.Sprintf("#%d  %s  回复: %d  点赞: %d", p.CurrentPost.Pid, ts, p.CurrentPost.Reply, p.CurrentPost.Likenum)
+	praiseState := "未点赞"
+	if p.CurrentPost.IsPraise {
+		praiseState = "已点赞"
+	}
+	followState := "未关注"
+	if p.CurrentPost.IsFollow {
+		followState = "已关注"
+	}
+	return fmt.Sprintf("#%d  %s  回复: %d  赞: %d(%s)  关注: %d(%s)", p.CurrentPost.Pid, ts, p.CurrentPost.Reply, p.CurrentPost.PraiseNum, praiseState, p.CurrentPost.Likenum, followState)
 }
 
 func (p PostsPageModel) detailCommentsTitle() string {
@@ -708,7 +739,11 @@ func (p PostsPageModel) detailCommentsTitle() string {
 }
 
 func (p PostsPageModel) detailShortcutText() string {
-	return "Tab: 切换正文/评论 | s: 正序/逆序 | Esc: 返回列表 | ↑↓/PgUp/PgDn: 滚动当前区域"
+	shortcuts := []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c: 赞/关/评", "Esc: 返回", "PgUp/PgDn"}
+	if !p.CanWrite {
+		shortcuts = []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c: 不可用", "Esc: 返回", "PgUp/PgDn", "只读"}
+	}
+	return strings.Join(shortcuts, " | ")
 }
 
 func (p PostsPageModel) renderDetailHeader(width int) string {
@@ -720,7 +755,10 @@ func (p PostsPageModel) renderDetailHeader(width int) string {
 		vPostPidStyle.Render(fmt.Sprintf("#%d", p.CurrentPost.Pid)),
 		vPostTimeStyle.Render(ts),
 		vPostReplyStyle.Render(fmt.Sprintf("回复: %d", p.CurrentPost.Reply)),
-		vPostLikeStyle.Render(fmt.Sprintf("点赞: %d", p.CurrentPost.Likenum)),
+		vPostLikeStyle.Render(fmt.Sprintf("赞: %d", p.CurrentPost.PraiseNum)),
+		vPostLikeStyle.Render(p.postPraiseState()),
+		vPostLikeStyle.Render(fmt.Sprintf("关注: %d", p.CurrentPost.Likenum)),
+		vPostLikeStyle.Render(p.postFollowState()),
 	}, "  ")
 	if lipgloss.Width(styled) <= width {
 		return styled
@@ -734,6 +772,20 @@ func (p PostsPageModel) renderDetailCommentsTitle(width int, style lipgloss.Styl
 		availableWidth = 1
 	}
 	return style.Render(strings.Join(wrapVisibleLine(title, availableWidth), "\n"))
+}
+
+func (p PostsPageModel) postPraiseState() string {
+	if p.CurrentPost != nil && p.CurrentPost.IsPraise {
+		return "已点赞"
+	}
+	return "未点赞"
+}
+
+func (p PostsPageModel) postFollowState() string {
+	if p.CurrentPost != nil && p.CurrentPost.IsFollow {
+		return "已关注"
+	}
+	return "未关注"
 }
 
 func (p PostsPageModel) renderDetailShortcut(width int) string {

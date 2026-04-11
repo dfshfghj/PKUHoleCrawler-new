@@ -86,6 +86,8 @@ type Post struct {
 	FoldNum         int16     `json:"fold_num" gorm:"column:fold_num"`
 	IsFold          BoolInt   `json:"is_fold" gorm:"column:is_fold"`
 	CannotReply     BoolInt   `json:"cannot_reply" gorm:"column:cannot_reply"`
+	IsFollow        BoolInt   `json:"is_follow,omitempty" gorm:"-"`
+	IsPraise        BoolInt   `json:"is_praise,omitempty" gorm:"-"`
 	Comments        []Comment `json:"comment_list,omitempty" gorm:"foreignKey:Pid"`
 }
 
@@ -120,4 +122,12 @@ type Comment struct {
 	Quote           *Comment `json:"quote,omitempty" gorm:"foreignKey:QuoteID"`
 	MediaIds        string   `json:"media_ids" gorm:"column:media_ids"`
 	ExclusiveIdInfo string   `json:"-" gorm:"column:exclusive_id_info"` // 存储为JSON字符串
+	IsAuthor        BoolInt  `json:"is_author,omitempty" gorm:"-"`
+}
+
+type Tag struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	ParentID int    `json:"parent_id"`
 }

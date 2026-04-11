@@ -104,7 +104,7 @@ func TestUpdateLoadPostsMsg(t *testing.T) {
 		{Pid: 2, Text: "Post 2", Timestamp: 2000},
 	}
 
-	result, _ := m.Update(LoadPostsMsg{Posts: posts, Cursor: 0, HasMore: true})
+	result, _ := m.Update(LoadPostsMsg{Posts: posts, RequestCursor: 0, NextCursor: 0, HasMore: true})
 	m = result.(Model)
 
 	if m.Posts.PostListLoading {
@@ -144,7 +144,7 @@ func TestUpdateLoadCommentsMsg(t *testing.T) {
 		{Cid: 2, Text: "Comment 2", Timestamp: 2000},
 	}
 
-	result, _ := m.Update(LoadCommentsMsg{Comments: comments})
+	result, _ := m.Update(LoadCommentsMsg{Comments: comments, RequestCursor: 0, NextCursor: 0})
 	m = result.(Model)
 
 	if len(m.Posts.CommentList) != 2 {
@@ -208,7 +208,7 @@ func TestUpdateSearchPostsMsg(t *testing.T) {
 		{Pid: 1, Text: "Search result", Timestamp: 1000},
 	}
 
-	result, _ := m.Update(SearchPostsMsg{Posts: posts, Cursor: 0, HasMore: false})
+	result, _ := m.Update(SearchPostsMsg{Posts: posts, RequestCursor: 0, NextCursor: 0, HasMore: false})
 	m = result.(Model)
 
 	if !m.Posts.SearchActive {
@@ -1296,4 +1296,52 @@ func searchStr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestSessionRefreshSuccessClosesPrompt(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogSessionPrompt
+	m.SessionDialog = NewSessionPromptDialog(SessionState{FailureReason: SessionFailureReasonLogin, Message: "expired"})
+	result, _ := m.Update(SessionRefreshMsg{State: SessionState{Mode: SessionModeOnline, CanReadOnline: true, CanWriteOnline: true}})
+	got := result.(Model)
+	if got.Dialog == DialogSessionPrompt {
+		t.Fatal("session prompt should close after successful refresh")
+	}
+	if got.Session.Mode != SessionModeOnline {
+		t.Fatalf("session mode = %v, want online", got.Session.Mode)
+	}
+}
+
+func TestForceOfflineModeClearsLoginState(t *testing.T) {
+	m := newTestModel()
+	m.Home.LoggedIn = true
+	m.forceOfflineMode("network")
+	if m.Home.LoggedIn {
+		t.Fatal("forceOfflineMode should clear logged-in state")
+	}
+	if m.Session.Mode != SessionModeOffline {
+		t.Fatalf("session mode = %v, want offline", m.Session.Mode)
+	}
+}
+
+func TestTagSelectionClearsSearchState(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogTags
+	m.Posts.SearchActive = true
+	m.Posts.Searching = true
+	m.Posts.SearchInput = "keyword"
+	m.TagsDialog.SetTags([]models.Tag{{ID: 1, Label: "课程心得"}})
+	result, _ := m.handleTagsDialogKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if result.Posts.SearchActive {
+		t.Fatal("tag selection should clear SearchActive")
+	}
+	if result.Posts.Searching {
+		t.Fatal("tag selection should clear Searching")
+	}
+	if result.Posts.SearchInput != "" {
+		t.Fatalf("search input = %q, want empty", result.Posts.SearchInput)
+	}
+	if result.Posts.ActiveTagID != 1 {
+		t.Fatalf("active tag = %d, want 1", result.Posts.ActiveTagID)
+	}
 }

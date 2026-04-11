@@ -1261,7 +1261,7 @@ func TestViewPostDetailStrippedLines(t *testing.T) {
 	lines := visibleLines(output)
 
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"#42", "Detail post text", "First comment", "Second comment", "user1: quoted text", "正序", "Esc"}
+	expectedContent := []string{"#42", "Detail post text", "First comment", "Second comment", "user1: quoted text", "正序", "Esc", "p/f/c"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)
