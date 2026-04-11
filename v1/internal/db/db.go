@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"treehole/internal/config"
 	"treehole/internal/models"
@@ -30,6 +31,37 @@ func escapeLikePattern(s string) string {
 	s = strings.ReplaceAll(s, `%`, `\%`)
 	s = strings.ReplaceAll(s, `_`, `\_`)
 	return "%" + s + "%"
+}
+
+type postSearchQuery struct {
+	pid      *int32
+	keywords []string
+}
+
+func parsePostSearchQuery(raw string) postSearchQuery {
+	var q postSearchQuery
+	for _, token := range strings.Fields(raw) {
+		if strings.HasPrefix(token, "#") && len(token) > 1 {
+			if pid, err := strconv.ParseInt(token[1:], 10, 32); err == nil {
+				p := int32(pid)
+				q.pid = &p
+				continue
+			}
+		}
+		q.keywords = append(q.keywords, token)
+	}
+	return q
+}
+
+func applyPostSearch(query *gorm.DB, raw string) *gorm.DB {
+	search := parsePostSearchQuery(raw)
+	if search.pid != nil {
+		query = query.Where("pid = ?", *search.pid)
+	}
+	for _, keyword := range search.keywords {
+		query = query.Where("text LIKE ?", escapeLikePattern(keyword))
+	}
+	return query
 }
 
 type Database struct {
@@ -247,17 +279,21 @@ func (d *Database) GetPostsCursor(cursor int, limit int, sortAsc bool) ([]models
 func (d *Database) SearchPostsCursor(keyword string, cursor int, limit int, sortAsc bool) ([]models.Post, error) {
 	var posts []models.Post
 	order := "DESC"
-	comparator := "<"
+	query := d.db.Model(&models.Post{}).
+		Select("pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids")
 	if sortAsc {
 		order = "ASC"
-		comparator = ">"
 	}
+	query = applyPostSearch(query, keyword)
 
 	if cursor != 0 {
-		err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? AND pid "+comparator+" ? ORDER BY pid "+order+" LIMIT ?", escapeLikePattern(keyword), cursor, limit).Scan(&posts).Error
-		return posts, err
+		if sortAsc {
+			query = query.Where("pid > ?", cursor)
+		} else {
+			query = query.Where("pid < ?", cursor)
+		}
 	}
-	err := d.db.Raw("SELECT pid, text, anonymous, type, extra, timestamp, reply, likenum, status, is_comment, is_protect, is_top, label, media_ids FROM posts WHERE text LIKE ? ORDER BY pid "+order+" LIMIT ?", escapeLikePattern(keyword), limit).Scan(&posts).Error
+	err := query.Order("pid " + order).Limit(limit).Find(&posts).Error
 	return posts, err
 }
 
@@ -299,7 +335,7 @@ func (d *Database) SearchPostsOrderBy(keyword string, field string, cursor int, 
 	var posts []models.Post
 	orderCol := validateOrderField(field)
 
-	query := d.db.Model(&models.Post{}).Where("text LIKE ?", escapeLikePattern(keyword)).Order(orderCol + " DESC")
+	query := applyPostSearch(d.db.Model(&models.Post{}), keyword).Order(orderCol + " DESC")
 	if cursor != 0 {
 		query = query.Where(orderCol+" < ?", cursor)
 	}

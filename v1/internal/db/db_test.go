@@ -413,6 +413,42 @@ func TestSearchPostsCursor(t *testing.T) {
 	}
 }
 
+func TestSearchPostsCursorByPidAndMultiKeyword(t *testing.T) {
+	db, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	posts := []models.Post{
+		{Pid: 101, Text: "PKU food review", Type: "text", Timestamp: 1000},
+		{Pid: 102, Text: "PKU campus food", Type: "text", Timestamp: 2000},
+		{Pid: 103, Text: "campus only", Type: "text", Timestamp: 3000},
+	}
+	seedPosts(t, db, posts)
+
+	results, err := db.SearchPostsCursor("PKU food", 0, 10, false)
+	if err != nil {
+		t.Fatalf("SearchPostsCursor multi keyword: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("multi keyword results = %d, want 2", len(results))
+	}
+
+	results, err = db.SearchPostsCursor("#102", 0, 10, false)
+	if err != nil {
+		t.Fatalf("SearchPostsCursor by pid: %v", err)
+	}
+	if len(results) != 1 || results[0].Pid != 102 {
+		t.Fatalf("pid search returned %+v, want pid 102", results)
+	}
+
+	results, err = db.SearchPostsCursor("#101 review", 0, 10, false)
+	if err != nil {
+		t.Fatalf("SearchPostsCursor by pid + keyword: %v", err)
+	}
+	if len(results) != 1 || results[0].Pid != 101 {
+		t.Fatalf("pid+keyword search returned %+v, want pid 101", results)
+	}
+}
+
 func TestGetPostsOrderBy(t *testing.T) {
 	db, cleanup := setupTestDB(t)
 	defer cleanup()

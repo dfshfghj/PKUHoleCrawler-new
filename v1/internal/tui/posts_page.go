@@ -92,7 +92,7 @@ func (p *PostsPageModel) syncViewports(width, height int) {
 	}
 
 	if p.ShowPostDetail && p.CurrentPost != nil {
-		bodyHeight, commentHeight := p.calcDetailViewportHeights(height)
+		bodyHeight, commentHeight := p.calcDetailViewportHeights(width, height)
 		bodyContent := p.buildDetailBodyContent(contentWidth)
 		if p.postBodyContent != bodyContent || p.PostBodyViewport.Width != contentWidth || p.PostBodyViewport.Height != bodyHeight {
 			p.PostBodyViewport.Width = contentWidth
@@ -178,28 +178,14 @@ func (p PostsPageModel) renderPostDetail(width, height int) string {
 	if p.CurrentPost == nil {
 		return "无帖子数据"
 	}
-	ts := time.Unix(int64(p.CurrentPost.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
-	b.WriteString(vPostPidStyle.Render(fmt.Sprintf("#%d", p.CurrentPost.Pid)))
-	b.WriteString("  ")
-	b.WriteString(vPostTimeStyle.Render(ts))
-	b.WriteString("  ")
-	b.WriteString(vPostReplyStyle.Render(fmt.Sprintf("回复: %d", p.CurrentPost.Reply)))
-	b.WriteString("  ")
-	b.WriteString(vPostLikeStyle.Render(fmt.Sprintf("点赞: %d", p.CurrentPost.Likenum)))
+	b.WriteString(p.renderDetailHeader(width))
 	b.WriteString("\n")
 
 	dividerWidth := width - 8
 	if dividerWidth < 20 {
 		dividerWidth = 20
 	}
-	sortLabel := "正序"
-	if !p.CommentSortAsc {
-		sortLabel = "逆序"
-	}
-	commentsTitle := fmt.Sprintf("评论 %d  %s", len(p.CommentList), sortLabel)
-	if p.CommentListLoading {
-		commentsTitle += ", 加载中"
-	}
+	commentsTitle := p.detailCommentsTitle()
 	commentsTitleStyle := vSectionTitleStyle
 	bodySectionStyle := vDetailSection
 	commentsSectionStyle := vDetailSection
@@ -214,7 +200,7 @@ func (p PostsPageModel) renderPostDetail(width, height int) string {
 	if contentWidth < 20 {
 		contentWidth = 20
 	}
-	bodyHeight, commentHeight := p.calcDetailViewportHeights(height)
+	bodyHeight, commentHeight := p.calcDetailViewportHeights(width, height)
 	bodyViewport := viewport.New(contentWidth, bodyHeight)
 	bodyViewport.SetContent(p.buildDetailBodyContent(contentWidth))
 	if p.PostBodyViewport != nil {
@@ -226,7 +212,7 @@ func (p PostsPageModel) renderPostDetail(width, height int) string {
 	b.WriteString(vDividerStyle.Render(strings.Repeat("─", dividerWidth)))
 	b.WriteString("\n")
 
-	b.WriteString(commentsTitleStyle.Render(commentsTitle))
+	b.WriteString(p.renderDetailCommentsTitle(width, commentsTitleStyle, commentsTitle))
 	b.WriteString("\n")
 
 	if len(p.CommentList) == 0 {
@@ -241,7 +227,7 @@ func (p PostsPageModel) renderPostDetail(width, height int) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(vPaginationStyle.Render("Tab: 切换正文/评论 | s: 正序/逆序 | Esc: 返回列表 | ↑↓/PgUp/PgDn: 滚动当前区域"))
+	b.WriteString(p.renderDetailShortcut(width))
 	return b.String()
 }
 
@@ -636,8 +622,9 @@ func (p *PostsPageModel) calcPostViewportHeight(height int) int {
 	return avail
 }
 
-func (p *PostsPageModel) calcDetailViewportHeights(height int) (int, int) {
-	available := p.calcPostViewportHeight(height) - 3
+func (p *PostsPageModel) calcDetailViewportHeights(width, height int) (int, int) {
+	detailFixedLines := p.detailFixedLineCount(width)
+	available := height - detailFixedLines
 	if available < 8 {
 		return 4, 3
 	}
@@ -683,6 +670,79 @@ func (p *PostsPageModel) calcDetailViewportHeights(height int) (int, int) {
 	}
 
 	return bodyHeight, commentHeight
+}
+
+func (p PostsPageModel) detailFixedLineCount(width int) int {
+	titleStyle := vSectionTitleStyle
+	if p.DetailFocus == DetailFocusComments {
+		titleStyle = vSectionTitleFocused
+	}
+	return lipgloss.Height(p.renderDetailHeader(width)) +
+		p.detailDividerLineCount() +
+		lipgloss.Height(p.renderDetailCommentsTitle(width, titleStyle, p.detailCommentsTitle())) +
+		lipgloss.Height(p.renderDetailShortcut(width))
+}
+
+func (p PostsPageModel) detailDividerLineCount() int {
+	return 1
+}
+
+func (p PostsPageModel) detailHeaderPlain() string {
+	if p.CurrentPost == nil {
+		return ""
+	}
+	ts := time.Unix(int64(p.CurrentPost.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
+	return fmt.Sprintf("#%d  %s  回复: %d  点赞: %d", p.CurrentPost.Pid, ts, p.CurrentPost.Reply, p.CurrentPost.Likenum)
+}
+
+func (p PostsPageModel) detailCommentsTitle() string {
+	sortLabel := "正序"
+	if !p.CommentSortAsc {
+		sortLabel = "逆序"
+	}
+	title := fmt.Sprintf("评论 %d  %s", len(p.CommentList), sortLabel)
+	if p.CommentListLoading {
+		title += ", 加载中"
+	}
+	return title
+}
+
+func (p PostsPageModel) detailShortcutText() string {
+	return "Tab: 切换正文/评论 | s: 正序/逆序 | Esc: 返回列表 | ↑↓/PgUp/PgDn: 滚动当前区域"
+}
+
+func (p PostsPageModel) renderDetailHeader(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	ts := time.Unix(int64(p.CurrentPost.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
+	styled := strings.Join([]string{
+		vPostPidStyle.Render(fmt.Sprintf("#%d", p.CurrentPost.Pid)),
+		vPostTimeStyle.Render(ts),
+		vPostReplyStyle.Render(fmt.Sprintf("回复: %d", p.CurrentPost.Reply)),
+		vPostLikeStyle.Render(fmt.Sprintf("点赞: %d", p.CurrentPost.Likenum)),
+	}, "  ")
+	if lipgloss.Width(styled) <= width {
+		return styled
+	}
+	return strings.Join(wrapVisibleLine(p.detailHeaderPlain(), width), "\n")
+}
+
+func (p PostsPageModel) renderDetailCommentsTitle(width int, style lipgloss.Style, title string) string {
+	availableWidth := width - style.GetHorizontalFrameSize()
+	if availableWidth < 1 {
+		availableWidth = 1
+	}
+	return style.Render(strings.Join(wrapVisibleLine(title, availableWidth), "\n"))
+}
+
+func (p PostsPageModel) renderDetailShortcut(width int) string {
+	if width < 1 {
+		width = 1
+	}
+	return lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Render(strings.Join(wrapVisibleLine(p.detailShortcutText(), width), "\n"))
 }
 
 func clampInt(value, minValue, maxValue int) int {
@@ -748,8 +808,14 @@ func (p *PostsPageModel) shouldPrefetchCommentsMore() bool {
 	if p.CommentListLoading || !p.CommentListHasMore || p.CommentViewport == nil {
 		return false
 	}
-	totalLines := p.commentLineCount()
-	bottom := p.CommentViewport.YOffset + p.CommentViewport.Height
+	if p.CommentViewport.AtBottom() || p.CommentViewport.PastBottom() {
+		return true
+	}
+	totalLines := p.CommentViewport.TotalLineCount()
+	if totalLines == 0 {
+		totalLines = p.commentLineCount()
+	}
+	bottom := p.CommentViewport.YOffset + p.CommentViewport.VisibleLineCount()
 	return totalLines-bottom <= 3
 }
 

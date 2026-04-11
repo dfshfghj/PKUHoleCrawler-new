@@ -173,6 +173,34 @@ func TestHandlePostsKeyToggleCommentSortInDetail(t *testing.T) {
 	}
 }
 
+func TestShouldPrefetchCommentsMoreAtBottomWithWrappedShortcut(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Width = 36
+	m.Height = 24
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	m.Posts.CommentListHasMore = true
+	for i := 0; i < 20; i++ {
+		m.Posts.CommentList = append(m.Posts.CommentList, models.Comment{
+			Cid:       int32(i + 1),
+			Text:      strings.Repeat("comment body ", 3),
+			Timestamp: int32(1100 + i*10),
+			NameTag:   "user",
+		})
+	}
+
+	m.syncPostsPage()
+	m.Posts.CommentViewport.GotoBottom()
+
+	if !m.Posts.shouldPrefetchCommentsMore() {
+		t.Fatal("should prefetch more comments when viewport is at bottom")
+	}
+}
+
 func TestUpdateSearchPostsMsg(t *testing.T) {
 	m := newTestModel()
 
@@ -593,6 +621,26 @@ func TestHandlePostsKeyRefresh(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Error("Should trigger loadPostsCmd")
+	}
+}
+
+func TestHandlePostsKeyRefreshInDetail(t *testing.T) {
+	m := newTestModel()
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{Pid: 1, Text: "Post", Timestamp: 1000}
+	m.Posts.CommentSortAsc = false
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = result
+
+	if !m.Posts.CommentListLoading {
+		t.Error("CommentListLoading should be true during detail refresh")
+	}
+	if cmd == nil {
+		t.Error("detail refresh should trigger loadPostDetailCmd")
+	}
+	if m.Posts.CurrentPost == nil || m.Posts.CurrentPost.Pid != 1 {
+		t.Error("CurrentPost should remain set before refresh completes")
 	}
 }
 

@@ -134,6 +134,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncPostsPage()
 		return m, nil
 
+	case LoadPostDetailMsg:
+		m.Posts.CommentListLoading = false
+		if msg.Error != nil {
+			m.Posts.CommentListError = msg.Error.Error()
+		} else {
+			m.Posts.CommentListError = ""
+			m.Posts.CurrentPost = msg.Post
+			m.Posts.CommentList = msg.Comments
+			m.Posts.CommentListCursor = nextCommentCursor(msg.Comments)
+			m.Posts.CommentListHasMore = msg.HasMore
+			m.Posts.CommentSortAsc = msg.SortAsc
+			m.Posts.commentContent = ""
+			m.Posts.postBodyContent = ""
+			m.Posts.PostBodyViewport.GotoTop()
+			m.Posts.CommentViewport.GotoTop()
+		}
+		m.syncPostsPage()
+		return m, nil
+
 	case LoadLogsMsg:
 		if msg.Error != nil {
 			m.LogsDialog.SetError(msg.Error)
@@ -297,6 +316,12 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.Posts.CommentListLoading = true
 				return m, loadCommentsCmd(m.Database, m.Posts.CurrentPost.Pid, nextSortAsc, 0)
 			}
+		case "r":
+			if m.Posts.CurrentPost != nil {
+				m.Posts.CommentListLoading = true
+				m.Posts.CommentListError = ""
+				return m, loadPostDetailCmd(m.Database, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc)
+			}
 		case "up":
 			if m.Posts.DetailFocus == DetailFocusPost {
 				m.Posts.PostBodyViewport.ScrollUp(1)
@@ -416,7 +441,7 @@ func (m Model) clearSearchResults() (Model, tea.Cmd) {
 }
 
 func (m *Model) syncPostsPage() {
-	m.Posts.syncViewports(m.Width, m.Height)
+	m.Posts.syncViewports(m.Width, m.contentAreaHeightForSize(m.Width, m.Height))
 }
 
 func (m Model) handleConfigKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -517,6 +542,26 @@ func loadCommentsCmd(database *db.Database, pid int32, sortAsc bool, cursor ...i
 		return LoadCommentsMsg{
 			Comments: comments,
 			Cursor:   begin,
+			HasMore:  len(comments) == batchSize,
+			SortAsc:  sortAsc,
+		}
+	}
+}
+
+func loadPostDetailCmd(database *db.Database, pid int32, sortAsc bool) tea.Cmd {
+	return func() tea.Msg {
+		post, err := database.GetPostByPid(pid)
+		if err != nil {
+			return LoadPostDetailMsg{Error: err}
+		}
+		const batchSize = 50
+		comments, err := database.GetCommentsByPidCursor(pid, 0, batchSize, sortAsc)
+		if err != nil {
+			return LoadPostDetailMsg{Error: err}
+		}
+		return LoadPostDetailMsg{
+			Post:     post,
+			Comments: comments,
 			HasMore:  len(comments) == batchSize,
 			SortAsc:  sortAsc,
 		}

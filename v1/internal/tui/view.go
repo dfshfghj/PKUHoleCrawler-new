@@ -51,15 +51,9 @@ func (m Model) View() string {
 		Align(lipgloss.Right).
 		Foreground(colorMuted).
 		Background(colorBg).
-		Render(footerText)
+		Render(truncateVisibleLine(footerText, w, "..."))
 
-	chromeHeight := lipgloss.Height(tabBar) + lipgloss.Height(footer)
-
-	// Content area - fixed height between tab bar and footer
-	contentHeight := h - chromeHeight
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
+	contentHeight := m.contentAreaHeightForSize(w, h)
 	content := m.renderContent(contentHeight)
 	contentBlock := lipgloss.Place(
 		w,
@@ -93,6 +87,24 @@ func (m Model) View() string {
 	}
 
 	return rendered
+}
+
+func (m Model) contentAreaHeightForSize(width, height int) int {
+	tabBarWidth := width - tabBarStyle.GetHorizontalFrameSize()
+	if tabBarWidth < 1 {
+		tabBarWidth = 1
+	}
+	tabBar := tabBarStyle.Width(tabBarWidth).Render("")
+	footerText := fmt.Sprintf("TreeHole TUI v1.0 | h: 帮助 | %s", time.Now().In(shanghaiLocation).Format("15:04:05"))
+	footer := lipgloss.NewStyle().
+		Width(width).
+		Align(lipgloss.Right).
+		Render(truncateVisibleLine(footerText, width, "..."))
+	contentHeight := height - lipgloss.Height(tabBar) - lipgloss.Height(footer)
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+	return contentHeight
 }
 
 func (m Model) renderContent(contentHeight int) string {

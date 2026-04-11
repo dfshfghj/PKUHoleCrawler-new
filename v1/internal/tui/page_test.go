@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1036,6 +1037,75 @@ func TestViewFrameMatchesConfiguredDimensionsHome(t *testing.T) {
 	}
 }
 
+func TestViewFrameMatchesConfiguredDimensionsDetail(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: strings.Repeat("Detail post text\n", 8), Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	for i := 0; i < 20; i++ {
+		m.Posts.CommentList = append(m.Posts.CommentList, models.Comment{
+			Cid:       int32(i + 1),
+			Text:      strings.Repeat("comment body ", 6),
+			Timestamp: int32(1100 + i*10),
+			NameTag:   "user",
+		})
+	}
+	m.Width = 80
+	m.Height = 24
+
+	lines := frameLines(m.View())
+	if len(lines) != m.Height {
+		t.Fatalf("detail frame line count = %d, want %d", len(lines), m.Height)
+	}
+
+	for i, line := range lines {
+		if lipgloss.Width(line) > m.Width {
+			t.Fatalf("detail line[%d] width = %d, want <= %d: %q", i, lipgloss.Width(line), m.Width, line)
+		}
+	}
+}
+
+func TestViewDetailUsesAvailableHeight(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: strings.Repeat("Detail post text\n", 6), Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	for i := 0; i < 20; i++ {
+		m.Posts.CommentList = append(m.Posts.CommentList, models.Comment{
+			Cid:       int32(i + 1),
+			Text:      strings.Repeat("comment body ", 5),
+			Timestamp: int32(1100 + i*10),
+			NameTag:   "user",
+		})
+	}
+	m.Width = 80
+	m.Height = 24
+
+	lines := frameLines(m.View())
+	shortcutLine := -1
+	footerLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Tab: 切换正文/评论") {
+			shortcutLine = i
+		}
+		if strings.Contains(line, "TreeHole TUI v1.0") {
+			footerLine = i
+		}
+	}
+	if shortcutLine == -1 || footerLine == -1 {
+		t.Fatalf("missing shortcut or footer line in detail view")
+	}
+	if footerLine-shortcutLine > 1 {
+		t.Fatalf("detail view leaves too much blank space before footer: shortcut=%d footer=%d", shortcutLine, footerLine)
+	}
+}
+
 func TestDetailViewportBodyHeightCappedToHalf(t *testing.T) {
 	p := NewPostsPageModel()
 	p.ShowPostDetail = true
@@ -1048,8 +1118,8 @@ func TestDetailViewportBodyHeightCappedToHalf(t *testing.T) {
 		{Cid: 2, Text: "评论2", Timestamp: 1200, NameTag: "user2"},
 	}
 
-	bodyHeight, commentHeight := p.calcDetailViewportHeights(24)
-	available := p.calcPostViewportHeight(24) - 4
+	bodyHeight, commentHeight := p.calcDetailViewportHeights(80, 24)
+	available := 24 - 4
 
 	if bodyHeight > available/2 {
 		t.Fatalf("bodyHeight = %d, want <= %d", bodyHeight, available/2)
@@ -1070,9 +1140,65 @@ func TestDetailViewportBodyHeightStaysCompactForShortPost(t *testing.T) {
 		{Cid: 1, Text: "评论1", Timestamp: 1100, NameTag: "user1"},
 	}
 
-	bodyHeight, _ := p.calcDetailViewportHeights(24)
+	bodyHeight, _ := p.calcDetailViewportHeights(80, 24)
 	if bodyHeight > 2 {
 		t.Fatalf("bodyHeight = %d, want <= 2 for short post", bodyHeight)
+	}
+}
+
+func TestDetailViewportAccountsForWrappedShortcutLines(t *testing.T) {
+	p := NewPostsPageModel()
+	p.ShowPostDetail = true
+	p.CurrentPost = &models.Post{
+		Pid: 42, Text: strings.Repeat("正文 ", 8), Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	for i := 0; i < 12; i++ {
+		p.CommentList = append(p.CommentList, models.Comment{
+			Cid:       int32(i + 1),
+			Text:      strings.Repeat("评论内容 ", 5),
+			Timestamp: int32(1100 + i*10),
+			NameTag:   "user",
+		})
+	}
+
+	width := 36
+	height := 24
+	bodyHeight, commentHeight := p.calcDetailViewportHeights(width, height)
+	fixedLines := p.detailFixedLineCount(width)
+	if got := bodyHeight + commentHeight + fixedLines; got != height {
+		t.Fatalf("detail layout uses %d lines, want %d", got, height)
+	}
+}
+
+func TestViewPostDetailBottomShowsLastCommentWithWrappedShortcut(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.ShowPostDetail = true
+	m.Posts.CurrentPost = &models.Post{
+		Pid: 42, Text: "Detail post text", Timestamp: 1000,
+		Reply: 5, Likenum: 10,
+	}
+	for i := 0; i < 12; i++ {
+		text := fmt.Sprintf("comment %02d", i+1)
+		if i == 11 {
+			text = "LAST COMMENT"
+		}
+		m.Posts.CommentList = append(m.Posts.CommentList, models.Comment{
+			Cid:       int32(i + 1),
+			Text:      text,
+			Timestamp: int32(1100 + i*10),
+			NameTag:   "user",
+		})
+	}
+	m.Width = 36
+	m.Height = 24
+	m.syncPostsPage()
+	m.Posts.CommentViewport.GotoBottom()
+
+	output := m.View()
+	if !strings.Contains(strings.Join(visibleLines(output), "\n"), "LAST COMMENT") {
+		t.Fatalf("bottom of detail view should show last comment, got:\n%s", output)
 	}
 }
 

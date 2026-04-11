@@ -94,6 +94,14 @@ type SearchPostsMsg struct {
 	Error   error
 }
 
+type LoadPostDetailMsg struct {
+	Post     *models.Post
+	Comments []models.Comment
+	HasMore  bool
+	SortAsc  bool
+	Error    error
+}
+
 type LoadLogsMsg struct {
 	Lines []string
 	Error error
