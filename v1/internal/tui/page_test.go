@@ -223,6 +223,33 @@ func TestBuildPostListContentWrapsToViewportWidth(t *testing.T) {
 	}
 }
 
+func TestBuildPostListContentNormalizesKeycapSequences(t *testing.T) {
+	if got := normalizeRenderedText("q22⑦76️⃣8545"); got != "q22⑦768545" {
+		t.Fatalf("normalizeRenderedText() = %q, want %q", got, "q22⑦768545")
+	}
+
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: "求一份lgh中国现代文学史笔记，价格您定+q22⑦76️⃣8545", Timestamp: 1000, Anonymous: true},
+		{Pid: 2, Text: "next post", Timestamp: 1001, Anonymous: true},
+	}
+	m.Posts.SelectedPostIdx = 0
+	m.Width = 58
+	m.Height = 12
+	m.syncPostsPage()
+
+	contentWidth := m.Posts.currentListContentWidth()
+	content := stripANSI(m.Posts.buildPostListContent(contentWidth))
+
+	if strings.Contains(content, "\uFE0F") || strings.Contains(content, "\u20E3") {
+		t.Fatalf("rendered content should strip keycap combining runes, got %q", content)
+	}
+	if !strings.Contains(content, "q22⑦7685") || !strings.Contains(content, "45") {
+		t.Fatalf("rendered content should keep readable base digits after wrapping, got %q", content)
+	}
+}
+
 func TestBuildDetailBodyContentWrapsToInnerWidth(t *testing.T) {
 	longLine := strings.Repeat("B", 50)
 

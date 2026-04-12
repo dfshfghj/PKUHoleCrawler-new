@@ -376,7 +376,7 @@ func (p PostsPageModel) commentQuotePreview(c models.Comment, width int) string 
 	if quoteName == "" {
 		quoteName = "匿名"
 	}
-	preview := fmt.Sprintf("%s: %s", quoteName, strings.ReplaceAll(c.Quote.Text, "\n", " "))
+	preview := fmt.Sprintf("%s: %s", quoteName, strings.ReplaceAll(normalizeRenderedText(c.Quote.Text), "\n", " "))
 	return truncateVisibleLine(preview, width, "...")
 }
 
@@ -887,7 +887,7 @@ func (p PostsPageModel) currentListContentWidth() int {
 }
 
 func (p PostsPageModel) postDisplayText(post models.Post) string {
-	text := post.Text
+	text := normalizeRenderedText(post.Text)
 	if p.hasPostMedia(post) {
 		if text == "" {
 			return "[图片]"
@@ -898,7 +898,7 @@ func (p PostsPageModel) postDisplayText(post models.Post) string {
 }
 
 func (p PostsPageModel) commentDisplayText(c models.Comment, name string) string {
-	text := fmt.Sprintf("%s: %s", name, c.Text)
+	text := fmt.Sprintf("%s: %s", name, normalizeRenderedText(c.Text))
 	if p.hasCommentMedia(c) {
 		return text + "\n[图片]"
 	}
@@ -1021,6 +1021,35 @@ func wrapVisibleLine(line string, width int) []string {
 		return []string{""}
 	}
 	return wrapped
+}
+
+func normalizeRenderedText(text string) string {
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	out := make([]rune, 0, len(runes))
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		out = append(out, r)
+		if !isKeycapBaseRune(r) {
+			continue
+		}
+		if i+1 < len(runes) && runes[i+1] == '\uFE0F' {
+			if i+2 < len(runes) && runes[i+2] == '\u20E3' {
+				i += 2
+			}
+			continue
+		}
+		if i+1 < len(runes) && runes[i+1] == '\u20E3' {
+			i++
+		}
+	}
+	return string(out)
+}
+
+func isKeycapBaseRune(r rune) bool {
+	return (r >= '0' && r <= '9') || r == '#' || r == '*'
 }
 
 func truncateVisibleLine(line string, width int, suffix string) string {
