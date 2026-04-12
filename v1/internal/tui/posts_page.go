@@ -37,6 +37,7 @@ type PostsPageModel struct {
 	CommentViewport    *viewport.Model
 	commentContent     string
 	DetailFocus        DetailFocus
+	CommentCursorLine  int
 	SelectedCommentIdx int
 
 	PostsMode    PostsMode
@@ -62,6 +63,7 @@ func NewPostsPageModel() PostsPageModel {
 		CommentSortAsc:     true,
 		PostsMode:          PostsModeList,
 		DetailFocus:        DetailFocusComments,
+		CommentCursorLine:  0,
 		SelectedCommentIdx: 0,
 	}
 }
@@ -115,6 +117,7 @@ func (p *PostsPageModel) syncViewports(width, height int) {
 			p.CommentViewport.SetContent(commentContent)
 			p.commentContent = commentContent
 		}
+		p.reconcileCommentSelectionWithCursor()
 	}
 }
 
@@ -315,44 +318,19 @@ func (p PostsPageModel) buildPostListContent(contentWidth int) string {
 
 func (p PostsPageModel) buildCommentContent(contentWidth int) string {
 	if len(p.CommentList) == 0 {
-		if p.CommentListLoading {
-			return vLoadingStyle.Render("加载评论中...")
-		}
-		if p.CommentListError != "" {
-			return vErrorStyle.Render("错误: " + p.CommentListError)
-		}
-		return vEmptyStyle.Render("暂无评论")
+		return p.renderEmptyCommentState()
 	}
-	textWidth := p.commentBodyTextWidth(contentWidth)
 	var content strings.Builder
 	comments := p.orderedComments()
+	lineNo := 0
 	for i, c := range comments {
 		if i > 0 {
 			content.WriteString("\n")
 		}
-
-		prefix := "  "
-		if i == p.SelectedCommentIdx {
-			prefix = "▸ "
-		}
-
-		cName := c.NameTag
-		if cName == "" {
-			cName = "匿名"
-		}
-		cTs := time.Unix(int64(c.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
-		content.WriteString(prefix + cTs)
-		content.WriteString("\n")
-		if quotePreview := p.commentQuotePreview(c, textWidth); quotePreview != "" {
-			content.WriteString(prefix + vCommentQuoteStyle.Width(textWidth).Render(quotePreview) + "\n")
-		}
-		commentLines := p.wrapPlainTextLines(p.commentDisplayText(c, cName), textWidth)
-		for j, line := range commentLines {
-			if j > 0 {
-				content.WriteString("\n")
-			}
-			content.WriteString(prefix + line)
-		}
+		renderedLines := p.renderCommentLines(c, contentWidth, lineNo, i == p.SelectedCommentIdx)
+		block := strings.Join(renderedLines, "\n")
+		lineNo += len(renderedLines)
+		content.WriteString(block)
 	}
 	if p.CommentListError != "" {
 		content.WriteString("\n\n")
@@ -362,6 +340,67 @@ func (p PostsPageModel) buildCommentContent(contentWidth int) string {
 		content.WriteString(vLoadingStyle.Render("加载更多评论中..."))
 	}
 	return content.String()
+}
+
+func (p PostsPageModel) renderEmptyCommentState() string {
+	if p.CommentListLoading {
+		return vLoadingStyle.Render("加载评论中...")
+	}
+	if p.CommentListError != "" {
+		return vErrorStyle.Render("错误: " + p.CommentListError)
+	}
+	return vEmptyStyle.Render("暂无评论")
+}
+
+func (p PostsPageModel) renderCommentHeader(timestamp string) string {
+	return vCommentMetaTimeStyle.Render(timestamp)
+}
+
+func (p PostsPageModel) renderCommentBodyLine(author, line string) string {
+	prefix := author + ": "
+	if strings.HasPrefix(line, prefix) {
+		return vCommentAuthorStyle.Render(author) + ": " + strings.TrimPrefix(line, prefix)
+	}
+	return line
+}
+
+func (p PostsPageModel) commentLinePrefix(lineNo int) string {
+	if lineNo == p.CommentCursorLine {
+		return "▸ "
+	}
+	return "  "
+}
+
+func (p PostsPageModel) commentIndentedLine(lineNo int, line string) string {
+	return p.commentLinePrefix(lineNo) + line
+}
+
+func (p PostsPageModel) commentLogicalLines(c models.Comment, contentWidth int) []string {
+	lines := []string{p.renderCommentHeader(time.Unix(int64(c.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04"))}
+	if quotePreview := p.commentQuotePreview(c, p.commentQuoteTextWidth(contentWidth)); quotePreview != "" {
+		lines = append(lines, vCommentQuoteStyle.Render(quotePreview))
+	}
+	cName := c.NameTag
+	if cName == "" {
+		cName = "匿名"
+	}
+	for _, line := range p.wrapPlainTextLines(p.commentDisplayText(c, cName), p.commentBodyTextWidth(contentWidth)) {
+		lines = append(lines, p.renderCommentBodyLine(cName, line))
+	}
+	return lines
+}
+
+func (p PostsPageModel) renderCommentLines(c models.Comment, contentWidth, startLine int, selected bool) []string {
+	logicalLines := p.commentLogicalLines(c, contentWidth)
+	rendered := make([]string, 0, len(logicalLines))
+	for offset, line := range logicalLines {
+		renderedLine := p.commentIndentedLine(startLine+offset, line)
+		if selected {
+			renderedLine = vCommentSelectedStyle.Render(renderedLine)
+		}
+		rendered = append(rendered, renderedLine)
+	}
+	return rendered
 }
 
 func (p PostsPageModel) orderedComments() []models.Comment {
@@ -638,6 +677,7 @@ func (p *PostsPageModel) resetComments() {
 	p.CommentListError = ""
 	p.CommentSortAsc = true
 	p.commentContent = ""
+	p.CommentCursorLine = 0
 	p.SelectedCommentIdx = 0
 	p.CommentViewport.GotoTop()
 }
@@ -838,25 +878,13 @@ func (p *PostsPageModel) commentLineCount() int {
 	}
 	if len(p.CommentList) == 0 {
 		if p.CommentListLoading || p.CommentListError != "" {
-			return len(strings.Split(p.buildCommentContent(width), "\n"))
+			return len(strings.Split(p.renderEmptyCommentState(), "\n"))
 		}
 		return 1
 	}
-	textWidth := p.commentBodyTextWidth(width)
 	lines := 0
-	for i, c := range p.orderedComments() {
-		if i > 0 {
-			lines++
-		}
-		lines++
-		if p.commentQuotePreview(c, textWidth) != "" {
-			lines++
-		}
-		cName := c.NameTag
-		if cName == "" {
-			cName = "匿名"
-		}
-		lines += len(p.wrapPlainTextLines(p.commentDisplayText(c, cName), textWidth))
+	for _, c := range p.orderedComments() {
+		lines += len(p.commentLogicalLines(c, width))
 	}
 	if p.CommentListError != "" || p.CommentListLoading {
 		lines += 2
@@ -905,6 +933,17 @@ func (p PostsPageModel) commentDisplayText(c models.Comment, name string) string
 	return text
 }
 
+func (p PostsPageModel) commentBodyText(c models.Comment) string {
+	text := normalizeRenderedText(c.Text)
+	if p.hasCommentMedia(c) {
+		if text == "" {
+			return "[图片]"
+		}
+		return text + "\n[图片]"
+	}
+	return text
+}
+
 func (p PostsPageModel) hasPostMedia(post models.Post) bool {
 	return post.Type == "image" || strings.TrimSpace(post.MediaIds) != ""
 }
@@ -937,6 +976,13 @@ func (p PostsPageModel) commentBodyTextWidth(contentWidth int) int {
 	if focusedWidth := contentWidth - vDetailSectionFocused.GetHorizontalFrameSize() - 2; focusedWidth < width {
 		width = focusedWidth
 	}
+	width -= vCommentSelectedStyle.GetHorizontalFrameSize()
+	width -= lipgloss.Width("  ")
+	return maxInt(1, width)
+}
+
+func (p PostsPageModel) commentQuoteTextWidth(contentWidth int) int {
+	width := p.commentBodyTextWidth(contentWidth) - vCommentQuoteStyle.GetHorizontalFrameSize()
 	return maxInt(1, width)
 }
 
@@ -1088,26 +1134,85 @@ func (p *PostsPageModel) moveCommentSelection(delta int) {
 	if len(p.CommentList) == 0 {
 		return
 	}
-	p.SelectedCommentIdx = clampInt(p.SelectedCommentIdx+delta, 0, len(p.CommentList)-1)
-	p.scrollSelectedCommentIntoView()
+	totalLines := p.commentLineCount()
+	if totalLines <= 0 {
+		return
+	}
+	p.syncCommentCursorToSelection()
+	p.CommentCursorLine = clampInt(p.CommentCursorLine+delta, 0, totalLines-1)
+	p.SelectedCommentIdx = p.resolveCommentSelectionAtLine(p.CommentCursorLine, delta)
+	p.scrollCommentCursorIntoView()
 }
 
-func (p *PostsPageModel) scrollSelectedCommentIntoView() {
+func (p *PostsPageModel) commentPageMove(direction int) {
+	if len(p.CommentList) == 0 || p.CommentViewport == nil || direction == 0 {
+		return
+	}
+	totalLines := p.commentLineCount()
+	if totalLines <= 0 {
+		return
+	}
+	p.syncCommentCursorToSelection()
+	step := p.commentPageStep()
+	delta := step
+	if direction < 0 {
+		delta = -step
+	}
+	p.CommentCursorLine = clampInt(p.CommentCursorLine+delta, 0, totalLines-1)
+	p.SelectedCommentIdx = p.resolveCommentSelectionAtLine(p.CommentCursorLine, delta)
+
+	maxOffset := maxInt(0, totalLines-p.CommentViewport.VisibleLineCount())
+	p.CommentViewport.SetYOffset(clampInt(p.CommentViewport.YOffset+delta, 0, maxOffset))
+	p.scrollCommentCursorIntoView()
+}
+
+func (p *PostsPageModel) commentPageStep() int {
+	if p.CommentViewport == nil {
+		return 1
+	}
+	visibleLines := p.CommentViewport.VisibleLineCount()
+	if visibleLines <= 1 {
+		return 1
+	}
+	step := visibleLines - 2
+	if step < 1 {
+		step = 1
+	}
+	return step
+}
+
+func (p *PostsPageModel) scrollCommentCursorIntoView() {
 	if p.CommentViewport == nil || len(p.CommentList) == 0 {
 		return
 	}
-	start, end := p.commentLineRangeAt(p.SelectedCommentIdx)
 	visible := p.CommentViewport.VisibleLineCount()
 	if visible <= 0 {
 		return
 	}
-	if start < p.CommentViewport.YOffset {
-		p.CommentViewport.SetYOffset(start)
+
+	topMargin := 1
+	bottomMargin := 3
+	if maxTop := visible / 4; maxTop < topMargin {
+		topMargin = maxTop
+	}
+	if maxBottom := visible - 2; maxBottom < bottomMargin {
+		bottomMargin = maxBottom
+	}
+	if topMargin < 0 {
+		topMargin = 0
+	}
+	if bottomMargin < 0 {
+		bottomMargin = 0
+	}
+
+	topThreshold := p.CommentViewport.YOffset + topMargin
+	bottomThreshold := p.CommentViewport.YOffset + visible - bottomMargin - 1
+	if p.CommentCursorLine < topThreshold {
+		p.CommentViewport.SetYOffset(maxInt(0, p.CommentCursorLine-topMargin))
 		return
 	}
-	bottom := p.CommentViewport.YOffset + visible - 1
-	if end > bottom {
-		p.CommentViewport.SetYOffset(maxInt(0, end-visible+1))
+	if p.CommentCursorLine > bottomThreshold {
+		p.CommentViewport.SetYOffset(maxInt(0, p.CommentCursorLine-visible+bottomMargin+1))
 	}
 }
 
@@ -1120,26 +1225,86 @@ func (p *PostsPageModel) commentLineRangeAt(index int) (int, int) {
 	if p.CommentViewport != nil && p.CommentViewport.Width > 0 {
 		width = p.CommentViewport.Width
 	}
-	textWidth := p.commentBodyTextWidth(width)
 	for i, c := range p.orderedComments() {
-		if i > 0 {
-			line++
-		}
 		start := line
-		line++
-		if p.commentQuotePreview(c, textWidth) != "" {
-			line++
-		}
-		name := c.NameTag
-		if name == "" {
-			name = "匿名"
-		}
-		line += len(p.wrapPlainTextLines(p.commentDisplayText(c, name), textWidth))
+		line += len(p.commentLogicalLines(c, width))
 		if i == index {
 			return start, line - 1
 		}
 	}
 	return 0, 0
+}
+
+func (p *PostsPageModel) syncCommentCursorToSelection() {
+	if len(p.CommentList) == 0 {
+		p.CommentCursorLine = 0
+		p.SelectedCommentIdx = 0
+		return
+	}
+	if p.SelectedCommentIdx < 0 {
+		p.SelectedCommentIdx = 0
+	}
+	if p.SelectedCommentIdx >= len(p.CommentList) {
+		p.SelectedCommentIdx = len(p.CommentList) - 1
+	}
+	start, end := p.commentLineRangeAt(p.SelectedCommentIdx)
+	if p.CommentCursorLine < start || p.CommentCursorLine > end {
+		p.CommentCursorLine = start
+	}
+}
+
+func (p *PostsPageModel) reconcileCommentSelectionWithCursor() {
+	if len(p.CommentList) == 0 {
+		p.CommentCursorLine = 0
+		p.SelectedCommentIdx = 0
+		return
+	}
+	totalLines := p.commentLineCount()
+	if totalLines <= 0 {
+		p.CommentCursorLine = 0
+		p.SelectedCommentIdx = 0
+		return
+	}
+	p.CommentCursorLine = clampInt(p.CommentCursorLine, 0, totalLines-1)
+	if p.SelectedCommentIdx < 0 {
+		p.SelectedCommentIdx = 0
+	}
+	if p.SelectedCommentIdx >= len(p.CommentList) {
+		p.SelectedCommentIdx = len(p.CommentList) - 1
+	}
+	start, end := p.commentLineRangeAt(p.SelectedCommentIdx)
+	if p.CommentCursorLine >= start && p.CommentCursorLine <= end {
+		return
+	}
+	bias := -1
+	if p.CommentCursorLine > end {
+		bias = 1
+	}
+	p.SelectedCommentIdx = p.commentIndexAtLineWithBias(p.CommentCursorLine, bias)
+}
+
+func (p *PostsPageModel) commentIndexAtLine(target int) int {
+	return p.commentIndexAtLineWithBias(target, -1)
+}
+
+func (p *PostsPageModel) commentIndexAtLineWithBias(target, bias int) int {
+	line := 0
+	width := 20
+	if p.CommentViewport != nil && p.CommentViewport.Width > 0 {
+		width = p.CommentViewport.Width
+	}
+	for i, c := range p.orderedComments() {
+		commentLines := len(p.commentLogicalLines(c, width))
+		if target < line+commentLines {
+			return i
+		}
+		line += commentLines
+	}
+	return maxInt(0, len(p.CommentList)-1)
+}
+
+func (p *PostsPageModel) resolveCommentSelectionAtLine(target, bias int) int {
+	return p.commentIndexAtLineWithBias(target, bias)
 }
 
 func (p *PostsPageModel) SelectedPost() *models.Post {

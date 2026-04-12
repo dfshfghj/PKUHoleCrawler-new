@@ -114,6 +114,12 @@ var (
 
 	vCommentQuoteStyle lipgloss.Style
 
+	vCommentMetaTimeStyle lipgloss.Style
+
+	vCommentAuthorStyle lipgloss.Style
+
+	vCommentSelectedStyle lipgloss.Style
+
 	vDividerStyle lipgloss.Style
 
 	vFormLabelStyle lipgloss.Style
@@ -339,6 +345,20 @@ func applyTheme(mode string) {
 		Foreground(colorMuted).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorBorder).
+		Padding(0, 0, 0, 1)
+
+	vCommentMetaTimeStyle = lipgloss.NewStyle().
+		Foreground(colorSuccess)
+
+	vCommentAuthorStyle = lipgloss.NewStyle().
+		Foreground(colorAccent).
+		Bold(true)
+
+	vCommentSelectedStyle = lipgloss.NewStyle().
+		Foreground(colorText).
+		Background(colorAccentSoft).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
+		BorderForeground(colorAccent).
 		Padding(0, 0, 0, 1)
 
 	vDividerStyle = lipgloss.NewStyle().

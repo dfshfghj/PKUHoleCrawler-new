@@ -96,6 +96,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Posts.CommentListError = ""
 			if msg.RequestCursor == 0 {
 				m.Posts.CommentList = msg.Comments
+				m.Posts.CommentCursorLine = 0
 				m.Posts.SelectedCommentIdx = 0
 				m.Posts.CommentViewport.GotoTop()
 			} else {
@@ -142,6 +143,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Posts.CommentListError = ""
 			m.Posts.CurrentPost = msg.Post
 			m.Posts.CommentList = msg.Comments
+			m.Posts.CommentCursorLine = 0
 			m.Posts.SelectedCommentIdx = 0
 			m.Posts.CommentListCursor = msg.NextCursor
 			m.Posts.CommentListHasMore = msg.HasMore
@@ -437,13 +439,13 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			if m.Posts.DetailFocus == DetailFocusPost {
 				m.Posts.PostBodyViewport.PageUp()
 			} else {
-				m.Posts.CommentViewport.PageUp()
+				m.Posts.commentPageMove(-1)
 			}
 		case "pgdown":
 			if m.Posts.DetailFocus == DetailFocusPost {
 				m.Posts.PostBodyViewport.PageDown()
 			} else {
-				m.Posts.CommentViewport.PageDown()
+				m.Posts.commentPageMove(1)
 				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
 					m.Posts.CommentListLoading = true
 					return m, loadCommentsCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
