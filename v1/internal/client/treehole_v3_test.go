@@ -81,6 +81,26 @@ func TestListPostsV3IncludesPIDQuery(t *testing.T) {
 	}
 }
 
+func TestListPostsV3IncludesIsFollowQuery(t *testing.T) {
+	capture := newV3CaptureClient(t, `{"code":20000,"data":{"list":[],"total":0}}`)
+	isFollow := true
+
+	_, _, err := capture.client.ListPostsV3(V3ListPostsParams{
+		Page:     1,
+		Limit:    20,
+		IsFollow: &isFollow,
+	})
+	if err != nil {
+		t.Fatalf("ListPostsV3: %v", err)
+	}
+	if capture.rt.last == nil {
+		t.Fatal("expected request capture")
+	}
+	if got := capture.rt.last.URL.Query().Get("is_follow"); got != "1" {
+		t.Fatalf("is_follow query = %q, want %q", got, "1")
+	}
+}
+
 func TestCreateCommentV3WithQuoteSerializesCommentID(t *testing.T) {
 	capture := newV3CaptureClient(t, `{"code":20000,"data":{"cid":1,"pid":99,"text":"ok","timestamp":1}}`)
 	quoteID := int32(456)

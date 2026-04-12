@@ -28,3 +28,41 @@ func TestSplitPIDSearch(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePostListSearch(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantPID      int32
+		wantKeyword  string
+		wantIsFollow *bool
+	}{
+		{name: "empty", input: ""},
+		{name: "follow only", input: ":follow", wantIsFollow: boolPtr(true)},
+		{name: "follow with keyword", input: ":follow course review", wantKeyword: "course review", wantIsFollow: boolPtr(true)},
+		{name: "follow with pid", input: "#8123 :follow", wantPID: 8123, wantIsFollow: boolPtr(true)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parsePostListSearch(tc.input)
+			if got.pid != tc.wantPID {
+				t.Fatalf("pid = %d, want %d", got.pid, tc.wantPID)
+			}
+			if got.keyword != tc.wantKeyword {
+				t.Fatalf("keyword = %q, want %q", got.keyword, tc.wantKeyword)
+			}
+			switch {
+			case got.isFollow == nil && tc.wantIsFollow == nil:
+			case got.isFollow == nil || tc.wantIsFollow == nil:
+				t.Fatalf("isFollow = %v, want %v", got.isFollow, tc.wantIsFollow)
+			case *got.isFollow != *tc.wantIsFollow:
+				t.Fatalf("isFollow = %v, want %v", *got.isFollow, *tc.wantIsFollow)
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}

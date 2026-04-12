@@ -158,7 +158,7 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	searchStyle := vSearchInput.Width(maxInt(1, pageWidth-vSearchInput.GetHorizontalFrameSize()))
 	searchFocusedStyle := vSearchInputFocused.Width(maxInt(1, pageWidth-vSearchInputFocused.GetHorizontalFrameSize()))
 	if p.Searching {
-		searchLabel = "keyword | #pid: " + p.SearchInput
+		searchLabel = "keyword | #pid | :follow : " + p.SearchInput
 		b.WriteString(searchFocusedStyle.Render(searchLabel))
 	} else {
 		b.WriteString(searchStyle.Render(searchLabel))

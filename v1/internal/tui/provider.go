@@ -34,6 +34,10 @@ func NewOfflinePostsProvider(database *db.Database) *OfflinePostsProvider {
 }
 
 func (p *OfflinePostsProvider) ListPosts(cursor, limit, label int, keyword string) ([]models.Post, int, bool, error) {
+	search := parsePostListSearch(keyword)
+	if search.isFollow != nil {
+		return nil, 0, false, fmt.Errorf("离线模式暂不支持关注筛选")
+	}
 	if keyword != "" {
 		return p.SearchPosts(keyword, cursor, limit, label)
 	}
@@ -49,10 +53,14 @@ func (p *OfflinePostsProvider) ListPosts(cursor, limit, label int, keyword strin
 }
 
 func (p *OfflinePostsProvider) SearchPosts(keyword string, cursor, limit, label int) ([]models.Post, int, bool, error) {
+	search := parsePostListSearch(keyword)
+	if search.isFollow != nil {
+		return nil, 0, false, fmt.Errorf("离线模式暂不支持关注筛选")
+	}
 	if label != 0 {
 		return nil, 0, false, fmt.Errorf("离线模式暂不支持标签筛选")
 	}
-	posts, err := p.database.SearchPostsCursor(keyword, cursor, limit, false)
+	posts, err := p.database.SearchPostsCursor(search.keywordWithPID(), cursor, limit, false)
 	if err != nil {
 		return nil, 0, false, err
 	}
@@ -119,15 +127,16 @@ func NewOnlinePostsProvider(c *client.Client) *OnlinePostsProvider {
 
 func (p *OnlinePostsProvider) ListPosts(cursor, limit, label int, keyword string) ([]models.Post, int, bool, error) {
 	page := cursorToPage(cursor)
-	pid, plainKeyword := splitPIDSearch(keyword)
+	search := parsePostListSearch(keyword)
 	posts, total, err := p.client.ListPostsV3(client.V3ListPostsParams{
 		Page:          page,
 		Limit:         limit,
 		CommentLimit:  10,
 		CommentStream: 1,
-		Keyword:       plainKeyword,
+		Keyword:       search.keyword,
 		Label:         label,
-		Pid:           pid,
+		Pid:           search.pid,
+		IsFollow:      search.isFollow,
 	})
 	if err != nil {
 		return nil, 0, false, err
@@ -202,24 +211,61 @@ func (p *OnlinePostsProvider) CanWrite() bool {
 
 func (p *OnlinePostsProvider) Mode() SessionMode { return SessionModeOnline }
 
-func splitPIDSearch(keyword string) (int32, string) {
-	trimmed := strings.TrimSpace(keyword)
-	if trimmed == "" || !strings.HasPrefix(trimmed, "#") {
-		return 0, trimmed
+type postListSearch struct {
+	pid      int32
+	keyword  string
+	isFollow *bool
+}
+
+func (s postListSearch) keywordWithPID() string {
+	if s.pid == 0 {
+		return s.keyword
 	}
+	if s.keyword == "" {
+		return fmt.Sprintf("#%d", s.pid)
+	}
+	return fmt.Sprintf("#%d %s", s.pid, s.keyword)
+}
+
+func parsePostListSearch(raw string) postListSearch {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return postListSearch{}
+	}
+
 	parts := strings.Fields(trimmed)
 	if len(parts) == 0 {
-		return 0, trimmed
+		return postListSearch{}
 	}
-	pidText := strings.TrimPrefix(parts[0], "#")
-	if pidText == "" {
-		return 0, trimmed
+
+	var result postListSearch
+	keywords := make([]string, 0, len(parts))
+	for _, part := range parts {
+		switch part {
+		case ":follow":
+			value := true
+			result.isFollow = &value
+			continue
+		}
+
+		if result.pid == 0 && len(keywords) == 0 && strings.HasPrefix(part, "#") && len(part) > 1 {
+			pid, err := strconv.Atoi(strings.TrimPrefix(part, "#"))
+			if err == nil {
+				result.pid = int32(pid)
+				continue
+			}
+		}
+
+		keywords = append(keywords, part)
 	}
-	pid, err := strconv.Atoi(pidText)
-	if err != nil {
-		return 0, trimmed
-	}
-	return int32(pid), strings.Join(parts[1:], " ")
+
+	result.keyword = strings.Join(keywords, " ")
+	return result
+}
+
+func splitPIDSearch(keyword string) (int32, string) {
+	search := parsePostListSearch(keyword)
+	return search.pid, search.keyword
 }
 
 func cursorToPage(cursor int) int {
