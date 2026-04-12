@@ -83,6 +83,6 @@ func (m SessionPromptDialogModel) View(width int) string {
 		b.WriteString(prefix + option + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(vDialogHelpStyle.Render("↑↓: 选择 | Enter: 确认 | Esc: 关闭"))
+	b.WriteString(vDialogHelpStyle.Render("Enter: 确认 | Esc: 关闭"))
 	return b.String()
 }

@@ -146,7 +146,7 @@ func (m Model) renderPosts(contentHeight int) string {
 }
 
 func (m Model) renderConfigDialog() string {
-	return m.renderDialogCard(m.ConfigDialog.View(m.Width))
+	return m.renderDialogCard(m.ConfigDialog.View(m.Width, m.Height))
 }
 
 func (m Model) renderLogsDialog() string {

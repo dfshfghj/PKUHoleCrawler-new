@@ -316,6 +316,12 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	if m.Posts.Searching {
+		if m.Posts.SearchField.Value() != m.Posts.SearchInput {
+			m.Posts.SearchField.SetValue(m.Posts.SearchInput)
+		}
+		if !m.Posts.SearchField.Focused() {
+			_ = m.Posts.SearchField.Focus()
+		}
 		switch msg.Type {
 		case tea.KeyEscape:
 			return m.cancelSearchInput()
@@ -326,18 +332,12 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				return m, searchPostsCmd(m.Provider, m.Posts.SearchInput, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
 			}
 			return m, nil
-		case tea.KeyBackspace:
-			if len(m.Posts.SearchInput) > 0 {
-				m.Posts.SearchInput = m.Posts.SearchInput[:len(m.Posts.SearchInput)-1]
-			}
-			m.syncPostsPage()
-			return m, nil
 		default:
-			if msg.Type == tea.KeyRunes {
-				m.Posts.SearchInput += msg.String()
-			}
+			var cmd tea.Cmd
+			m.Posts.SearchField, cmd = m.Posts.SearchField.Update(msg)
+			m.Posts.SearchInput = m.Posts.SearchField.Value()
 			m.syncPostsPage()
-			return m, nil
+			return m, cmd
 		}
 	}
 
@@ -471,6 +471,9 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Posts.Searching = true
 		m.Posts.PostsMode = PostsModeSearchInput
 		m.Posts.SearchInput = ""
+		m.Posts.SearchField = newSearchInput()
+		m.Posts.SearchField.SetValue("")
+		_ = m.Posts.SearchField.Focus()
 		return m, nil
 	case "t":
 		m.Dialog = DialogTags
@@ -545,6 +548,7 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) cancelSearchInput() (Model, tea.Cmd) {
 	m.Posts.Searching = false
 	m.Posts.SearchInput = ""
+	m.Posts.SearchField = newSearchInput()
 	if m.Posts.SearchActive {
 		m.Posts.PostsMode = PostsModeSearchResults
 	} else {
@@ -558,6 +562,7 @@ func (m Model) clearActiveFilters() (Model, tea.Cmd) {
 	m.Posts.SearchActive = false
 	m.Posts.Searching = false
 	m.Posts.SearchInput = ""
+	m.Posts.SearchField = newSearchInput()
 	m.Posts.ActiveTagID = 0
 	m.Posts.ActiveTag = ""
 	m.Posts.PostsMode = PostsModeList
@@ -570,14 +575,6 @@ func (m Model) clearActiveFilters() (Model, tea.Cmd) {
 func (m *Model) syncPostsPage() {
 	m.Posts.SessionMode = m.Session.Mode
 	m.Posts.CanWrite = m.Session.CanWriteOnline && m.Session.Mode == SessionModeOnline
-	if m.Posts.StatusText == "" {
-		switch m.Session.Mode {
-		case SessionModeOnline:
-			m.Posts.StatusText = "当前为在线模式"
-		default:
-			m.Posts.StatusText = "当前为离线模式"
-		}
-	}
 	m.Posts.syncViewports(m.Width, m.contentAreaHeightForSize(m.Width, m.Height))
 }
 
@@ -995,7 +992,6 @@ func (m *Model) applySessionState(state SessionState) {
 	if state.CanReadOnline {
 		m.Provider = NewOnlinePostsProvider(m.Client)
 		m.Session.Mode = SessionModeOnline
-		m.Posts.StatusText = "当前为在线模式"
 		m.Home.LoggedIn = true
 	} else {
 		m.Provider = NewOfflinePostsProvider(m.Database)
@@ -1004,8 +1000,6 @@ func (m *Model) applySessionState(state SessionState) {
 		m.Posts.ActiveTag = ""
 		if state.Message != "" {
 			m.Posts.StatusText = "离线模式：" + state.Message
-		} else {
-			m.Posts.StatusText = "当前为离线模式"
 		}
 		m.Home.LoggedIn = false
 	}
@@ -1024,8 +1018,6 @@ func (m *Model) forceOfflineMode(reason string) {
 	m.Home.LoggedIn = false
 	if reason != "" {
 		m.Posts.StatusText = "离线模式：" + reason
-	} else {
-		m.Posts.StatusText = "当前为离线模式"
 	}
 	m.syncPostsPage()
 }

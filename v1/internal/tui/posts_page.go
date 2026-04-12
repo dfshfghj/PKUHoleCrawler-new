@@ -7,6 +7,7 @@ import (
 
 	"treehole/internal/models"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -43,6 +44,7 @@ type PostsPageModel struct {
 	PostsMode    PostsMode
 	Searching    bool
 	SearchInput  string
+	SearchField  textinput.Model
 	SearchActive bool
 	ActiveTagID  int
 	ActiveTag    string
@@ -55,11 +57,13 @@ func NewPostsPageModel() PostsPageModel {
 	pv := viewport.New(0, 0)
 	bv := viewport.New(0, 0)
 	cv := viewport.New(0, 0)
+	search := newSearchInput()
 	return PostsPageModel{
 		PostPerPage:        20,
 		PostViewport:       &pv,
 		PostBodyViewport:   &bv,
 		CommentViewport:    &cv,
+		SearchField:        search,
 		CommentSortAsc:     true,
 		PostsMode:          PostsModeList,
 		DetailFocus:        DetailFocusComments,
@@ -68,9 +72,21 @@ func NewPostsPageModel() PostsPageModel {
 	}
 }
 
+func newSearchInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = ""
+	input.Placeholder = "按 / 搜索 内容 或 #pid 或 :follow"
+	input.Width = 32
+	return input
+}
+
 func (p *PostsPageModel) ensureInitialized() {
 	if p.PostViewport == nil || p.PostBodyViewport == nil || p.CommentViewport == nil {
 		*p = NewPostsPageModel()
+	}
+	if p.SearchField.Prompt == "" {
+		p.SearchField = newSearchInput()
+		p.SearchField.SetValue(p.SearchInput)
 	}
 }
 
@@ -147,19 +163,23 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 		}
 		b.WriteString(vTitleStyle.Render(title))
 	}
-	b.WriteString("\n")
+
 	if p.StatusText != "" {
 		b.WriteString(vStatLabelStyle.Render(p.StatusText))
-		b.WriteString("\n")
 	}
+	b.WriteString("\n")
 
 	pageWidth := maxInt(20, width-8)
 	searchLabel := "按 / 搜索"
 	searchStyle := vSearchInput.Width(maxInt(1, pageWidth-vSearchInput.GetHorizontalFrameSize()))
 	searchFocusedStyle := vSearchInputFocused.Width(maxInt(1, pageWidth-vSearchInputFocused.GetHorizontalFrameSize()))
 	if p.Searching {
-		searchLabel = "keyword | #pid | :follow : " + p.SearchInput
-		b.WriteString(searchFocusedStyle.Render(searchLabel))
+		searchInput := p.SearchField
+		if searchInput.Value() != p.SearchInput {
+			searchInput.SetValue(p.SearchInput)
+		}
+		searchInput.Width = maxInt(1, pageWidth-searchFocusedStyle.GetHorizontalFrameSize())
+		b.WriteString(searchFocusedStyle.Render(searchInput.View()))
 	} else {
 		b.WriteString(searchStyle.Render(searchLabel))
 	}
@@ -192,7 +212,7 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	if !p.CanWrite {
 		postAction = "n: 发帖(不可用)"
 	}
-	status := fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | t: 标签 | p/f: 赞/关 | %s | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", postAction, len(p.PostList))
+	status := fmt.Sprintf("Enter: 查看 | t: 标签 | p/f: 点赞/关注 | %s | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", postAction, len(p.PostList))
 	if p.PostListLoading {
 		status += " | 正在加载更多..."
 	}
@@ -787,7 +807,7 @@ func (p PostsPageModel) detailCommentsTitle() string {
 }
 
 func (p PostsPageModel) detailShortcutText() string {
-	shortcuts := []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c/q: 赞/关/评/引", "Esc: 返回", "PgUp/PgDn"}
+	shortcuts := []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c/q: 点赞/关注/评/引", "Esc: 返回", "PgUp/PgDn"}
 	if !p.CanWrite {
 		shortcuts = []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c/q: 不可用", "Esc: 返回", "PgUp/PgDn", "只读"}
 	}
@@ -1078,24 +1098,50 @@ func normalizeRenderedText(text string) string {
 	for i := 0; i < len(runes); i++ {
 		r := runes[i]
 		out = append(out, r)
-		if !isKeycapBaseRune(r) {
-			continue
-		}
-		if i+1 < len(runes) && runes[i+1] == '\uFE0F' {
-			if i+2 < len(runes) && runes[i+2] == '\u20E3' {
-				i += 2
-			}
-			continue
-		}
-		if i+1 < len(runes) && runes[i+1] == '\u20E3' {
+
+		// Skip any Unicode modifiers or variation selectors that follow the base character
+		for i+1 < len(runes) && isUnicodeModifier(runes[i+1]) {
 			i++
 		}
 	}
 	return string(out)
 }
 
-func isKeycapBaseRune(r rune) bool {
-	return (r >= '0' && r <= '9') || r == '#' || r == '*'
+// isUnicodeModifier checks if a rune is a Unicode modifier or variation selector
+// that should be skipped when normalizing text.
+func isUnicodeModifier(r rune) bool {
+	// Variation Selectors (VS1-VS16): U+FE00-U+FE0F
+	if r >= '\uFE00' && r <= '\uFE0F' {
+		return true
+	}
+
+	// Combining Diacritical Marks: U+0300-U+036F
+	if r >= '\u0300' && r <= '\u036F' {
+		return true
+	}
+
+	// Emoji Modifiers (skin tone): U+1F3FB-U+1F3FF
+	if r >= '\U0001F3FB' && r <= '\U0001F3FF' {
+		return true
+	}
+
+	// Keycap symbol: U+20E3
+	if r == '\u20E3' {
+		return true
+	}
+
+	// Other common combining characters
+	// Combining Diacritical Marks Supplement: U+1DC0-U+1DFF
+	if r >= '\u1DC0' && r <= '\u1DFF' {
+		return true
+	}
+
+	// Combining Diacritical Marks for Symbols: U+20D0-U+20FF
+	if r >= '\u20D0' && r <= '\u20FF' {
+		return true
+	}
+
+	return false
 }
 
 func truncateVisibleLine(line string, width int, suffix string) string {

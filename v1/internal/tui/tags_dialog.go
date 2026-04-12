@@ -181,9 +181,9 @@ func (m TagsDialogModel) View(width int) string {
 		}
 	}
 	b.WriteString("\n")
-	help := "↑↓: 选择 | Enter: 进入/应用 | c: 清除 | Esc: 关闭"
+	help := "Enter: 进入/应用 | c: 清除 | Esc: 关闭"
 	if m.phase == tagsPhaseChildren {
-		help = "↑↓: 选择 | Enter: 应用 | ←/Backspace: 返回 | c: 清除 | Esc: 关闭"
+		help = "Enter: 应用 | ←/Backspace: 返回 | c: 清除 | Esc: 关闭"
 	}
 	b.WriteString(vDialogHelpStyle.Render(help))
 	return b.String()

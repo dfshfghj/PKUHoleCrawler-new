@@ -496,6 +496,21 @@ func TestHandlePostsKeySearchInput(t *testing.T) {
 	}
 }
 
+func TestHandlePostsKeySearchInputAllowsCursorMovement(t *testing.T) {
+	m := newTestModel()
+	m.Posts.Searching = true
+	m.Posts.SearchField = newSearchInput()
+	m.Posts.SearchField.SetValue("abc")
+	m.Posts.SearchInput = "abc"
+
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyLeft})
+	m, _ = m.handlePostsKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+
+	if got := m.Posts.SearchInput; got != "abXc" {
+		t.Fatalf("SearchInput after cursor edit = %q, want %q", got, "abXc")
+	}
+}
+
 func TestHandlePostsKeySearchBackspace(t *testing.T) {
 	m := newTestModel()
 	m.Posts.Searching = true
@@ -789,6 +804,19 @@ func TestHandleConfigKeyBackspace(t *testing.T) {
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyBackspace})
 	if m.ConfigDialog.Username() != "tes" {
 		t.Errorf("ConfigDialog.Username = %s, want 'tes'", m.ConfigDialog.Username())
+	}
+}
+
+func TestHandleConfigKeyAllowsHorizontalCursorMovement(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogConfig
+	m.ConfigDialog = NewConfigDialog(&config.Config{Username: "abc"})
+
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyLeft})
+	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+
+	if got := m.ConfigDialog.Username(); got != "abXc" {
+		t.Fatalf("ConfigDialog.Username = %q, want %q", got, "abXc")
 	}
 }
 
@@ -1223,7 +1251,7 @@ func TestViewConfigDialog(t *testing.T) {
 		SecretKey: "KEY123",
 	})
 	m.Width = 80
-	m.Height = 24
+	m.Height = 40
 
 	output := m.View()
 

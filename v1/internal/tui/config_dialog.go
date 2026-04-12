@@ -7,6 +7,7 @@ import (
 	"treehole/internal/config"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -32,6 +33,8 @@ type ConfigDialogModel struct {
 	saving         bool
 	saveOK         bool
 	lastErr        string
+	formViewport   viewport.Model
+	formContent    string
 }
 
 var authFieldDefs = []configFieldDef{
@@ -93,6 +96,7 @@ func NewConfigDialog(cfg *config.Config) ConfigDialogModel {
 		authInputs:     newConfigInputs(authFieldDefs, authValues),
 		databaseInputs: newConfigInputs(databaseFieldDefs, dbValues),
 		section:        ConfigSectionAuth,
+		formViewport:   viewport.New(0, 0),
 	}
 	m.setFocus(0)
 	return m
@@ -259,12 +263,6 @@ func (m *ConfigDialogModel) Update(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
 	case tea.KeyEscape:
 		return nil
-	case tea.KeyLeft:
-		m.switchSection(ConfigSectionAuth)
-		return nil
-	case tea.KeyRight, tea.KeyTab:
-		m.switchSection(ConfigSectionDatabase)
-		return nil
 	case tea.KeyUp:
 		if m.focus > 0 {
 			m.setFocus(m.focus - 1)
@@ -280,6 +278,16 @@ func (m *ConfigDialogModel) Update(msg tea.KeyMsg) tea.Cmd {
 			m.setFocus(m.saveIndex())
 		}
 		return nil
+	case tea.KeyLeft:
+		if m.IsSaveFocused() {
+			m.switchSection(ConfigSectionAuth)
+			return nil
+		}
+	case tea.KeyRight:
+		if m.IsSaveFocused() {
+			m.switchSection(ConfigSectionDatabase)
+			return nil
+		}
 	}
 
 	if m.focus < m.saveIndex() {
@@ -303,8 +311,8 @@ func (m ConfigDialogModel) renderSidebar() string {
 		label  string
 		active bool
 	}{
-		{"账号/认证", m.section == ConfigSectionAuth},
-		{"数据库", m.section == ConfigSectionDatabase},
+		{"账号/认证\n", m.section == ConfigSectionAuth},
+		{"数据库\n", m.section == ConfigSectionDatabase},
 	}
 	var lines []string
 	for _, item := range items {
@@ -316,12 +324,102 @@ func (m ConfigDialogModel) renderSidebar() string {
 		}
 		lines = append(lines, style.Render(prefix+item.label))
 	}
-	lines = append(lines, "", vDialogHelpStyle.Render("←/→ 切换"))
 	return strings.Join(lines, "\n")
 }
 
-func (m ConfigDialogModel) View(width int) string {
+func (m ConfigDialogModel) dialogContentWidth(totalWidth int) int {
+	return minInt(70, maxInt(40, totalWidth-8))
+}
+
+func (m ConfigDialogModel) fieldBoxContentWidth(dialogWidth int) int {
+	return minInt(40, maxInt(24, dialogWidth-30))
+}
+
+func (m ConfigDialogModel) fieldValueDisplay(input textinput.Model, def configFieldDef, focused bool) string {
+	value := input.Value()
+	if def.secret {
+		value = strings.Repeat("*", len([]rune(value)))
+	}
+	if !focused {
+		return value
+	}
+
+	runes := []rune(value)
+	pos := input.Position()
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(runes) {
+		pos = len(runes)
+	}
+
+	withCursor := make([]rune, 0, len(runes)+1)
+	withCursor = append(withCursor, runes[:pos]...)
+	withCursor = append(withCursor, '█')
+	withCursor = append(withCursor, runes[pos:]...)
+	return string(withCursor)
+}
+
+func (m ConfigDialogModel) renderFieldBox(input textinput.Model, def configFieldDef, boxContentWidth int, focused bool) string {
+	prefixWidth := lipgloss.Width(def.label) + 1
+	valueWidth := maxInt(1, boxContentWidth-prefixWidth)
+	valueLines := wrapVisibleLine(m.fieldValueDisplay(input, def, focused), valueWidth)
+	if len(valueLines) == 0 {
+		valueLines = []string{""}
+	}
+
+	contentLines := make([]string, 0, len(valueLines))
+	for i, line := range valueLines {
+		prefix := strings.Repeat(" ", prefixWidth)
+		if i == 0 {
+			prefix = def.label + strings.Repeat(" ", maxInt(0, prefixWidth-lipgloss.Width(def.label)))
+		}
+		row := lipgloss.NewStyle().
+			Width(boxContentWidth).
+			Render(prefix + line)
+		contentLines = append(contentLines, row)
+	}
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder)
+	if focused {
+		boxStyle = boxStyle.BorderForeground(colorAccent)
+	}
+
+	return boxStyle.Render(strings.Join(contentLines, "\n"))
+}
+
+func (m *ConfigDialogModel) syncFormViewport(width, height int, content string, focusRanges [][2]int) {
+	if width < 1 {
+		width = 1
+	}
+	if height < 1 {
+		height = 1
+	}
+	if m.formViewport.Width != width || m.formViewport.Height != height || m.formContent != content {
+		m.formViewport = viewport.New(width, height)
+		m.formViewport.SetContent(content)
+		m.formContent = content
+	}
+	if m.focus >= 0 && m.focus < len(focusRanges) {
+		top := focusRanges[m.focus][0]
+		bottom := focusRanges[m.focus][1]
+		viewTop := m.formViewport.YOffset
+		viewBottom := viewTop + m.formViewport.Height - 1
+		if top < viewTop {
+			m.formViewport.SetYOffset(top)
+		} else if bottom > viewBottom {
+			m.formViewport.SetYOffset(maxInt(0, bottom-m.formViewport.Height+1))
+		}
+	}
+}
+
+func (m *ConfigDialogModel) View(width, height int) string {
 	var b strings.Builder
+
+	dialogWidth := m.dialogContentWidth(width)
+	boxContentWidth := m.fieldBoxContentWidth(dialogWidth)
 
 	b.WriteString(vDialogTitleStyle.Render("配置管理"))
 	b.WriteString("\n\n")
@@ -330,39 +428,54 @@ func (m ConfigDialogModel) View(width int) string {
 
 	fieldDefs := m.currentFieldDefs()
 	inputs := m.currentInputs()
-	inputWidth := minInt(40, maxInt(24, width-42))
 
 	var form strings.Builder
+	var focusRanges [][2]int
+	currentLine := 0
 	for i, f := range fieldDefs {
-		labelStyle := vFormLabelStyle
-		inputStyle := vFormInput.Width(inputWidth)
-		if m.focus == i {
-			labelStyle = labelStyle.Foreground(colorAccent)
-			inputStyle = vFormInputFocused.Width(inputWidth)
-		}
-		input := inputs[i]
-		input.Width = inputWidth
-		form.WriteString(lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			labelStyle.Render(f.label),
-			inputStyle.Render(input.View()),
-		))
-		form.WriteString("\n")
+		block := m.renderFieldBox(inputs[i], f, boxContentWidth, m.focus == i)
+		blockHeight := lipgloss.Height(block)
+		focusRanges = append(focusRanges, [2]int{currentLine, currentLine + blockHeight - 1})
+		form.WriteString(block)
+		form.WriteString("\n\n")
+		currentLine += blockHeight + 2
 	}
 
 	saveBtn := "保存配置"
+	saveRendered := vFormSaveBtn.Render(saveBtn)
 	if m.IsSaveFocused() {
-		form.WriteString("\n")
-		form.WriteString(vFormSaveActive.Render(saveBtn))
-	} else {
-		form.WriteString("\n")
-		form.WriteString(vFormSaveBtn.Render(saveBtn))
+		saveRendered = vFormSaveActive.Render(saveBtn)
 	}
+	saveLine := lipgloss.NewStyle().
+		Width(boxContentWidth + 2).
+		Align(lipgloss.Right).
+		Render(saveRendered)
+	saveHeight := lipgloss.Height(saveLine)
+	focusRanges = append(focusRanges, [2]int{currentLine, currentLine + saveHeight - 1})
+	form.WriteString(saveLine)
+
+	formWidth := boxContentWidth + 2
+	helpText := vDialogHelpStyle.Render("按钮上 ← →: 切换页面 | Esc: 关闭")
+	headerHeight := lipgloss.Height(b.String())
+	statusHeight := 0
+	if m.saving {
+		statusHeight += lipgloss.Height(vLoadingStyle.Render("保存中..."))
+	}
+	if m.saveOK {
+		statusHeight += lipgloss.Height(vStatusRunningStyle.Render("配置已保存!"))
+	}
+	if m.lastErr != "" {
+		statusHeight += lipgloss.Height(vErrorStyle.Render("错误: " + m.lastErr))
+	}
+	footerHeight := lipgloss.Height(helpText) + 2
+	bodyHeight := maxInt(3, height-dialogCard.GetVerticalFrameSize()-headerHeight-statusHeight-footerHeight)
+	m.syncFormViewport(formWidth, bodyHeight, form.String(), focusRanges)
 
 	body := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		lipgloss.NewStyle().Width(14).Render(m.renderSidebar()),
-		lipgloss.NewStyle().Width(maxInt(30, width-24)).Render(form.String()),
+		lipgloss.NewStyle().Width(12).Render(m.renderSidebar()),
+		"   ",
+		m.formViewport.View(),
 	)
 	b.WriteString(body)
 
@@ -380,7 +493,7 @@ func (m ConfigDialogModel) View(width int) string {
 	}
 
 	b.WriteString("\n\n")
-	b.WriteString(vDialogHelpStyle.Render("↑↓: 选择 | Enter: 前往保存/保存 | ←→: 切换页面 | Esc: 关闭"))
+	b.WriteString(helpText)
 	return b.String()
 }
 

@@ -1444,7 +1444,7 @@ func TestViewConfigDialogStrippedLines(t *testing.T) {
 	lines := visibleLines(output)
 
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"配置管理", "config.json", "用户名", "密码", "SecretKey", "保存配置"}
+	expectedContent := []string{"配置管理", "config.json", "用户名", "密码", "SecretKey"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)
@@ -1638,6 +1638,64 @@ func TestViewStrippedOutputNotEmpty(t *testing.T) {
 			}
 
 			t.Logf("%s: %d stripped chars, %d visible lines", tt.name, len(stripped), len(lines))
+		})
+	}
+}
+
+func TestNormalizeRenderedText(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "basic text",
+			input:    "Hello World",
+			expected: "Hello World",
+		},
+		{
+			name:     "keycap numbers",
+			input:    "1️⃣ 2️⃣ 3️⃣",
+			expected: "1 2 3",
+		},
+		{
+			name:     "emoji with skin tone",
+			input:    "✍🏻 ✍🏼 ✍🏽 ✍🏾 ✍🏿",
+			expected: "✍ ✍ ✍ ✍ ✍",
+		},
+		{
+			name:     "variation selectors",
+			input:    "A\uFE0F B\uFE00 C\uFE0E",
+			expected: "A B C",
+		},
+		{
+			name:     "combining diacritical marks",
+			input:    "a\u0300a\u0301a\u0302a\u0303a\u0308a\u030A",
+			expected: "aaaaaa",
+		},
+		{
+			name:     "mixed complex unicode",
+			input:    "Hello ✍🏻 World 1️⃣ 2️⃣! A\uFE0F",
+			expected: "Hello ✍ World 1 2! A",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "chinese text with emoji",
+			input:    "测试 ✍🏻 中文 1️⃣",
+			expected: "测试 ✍ 中文 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeRenderedText(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeRenderedText(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
 		})
 	}
 }

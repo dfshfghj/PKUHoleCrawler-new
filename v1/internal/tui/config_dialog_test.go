@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"treehole/internal/config"
@@ -15,6 +16,7 @@ func TestConfigDialogUpdateSwitchesSections(t *testing.T) {
 		t.Fatalf("initial section = %v, want auth", dialog.ActiveSection())
 	}
 
+	dialog.setFocus(dialog.saveIndex())
 	dialog.Update(tea.KeyMsg{Type: tea.KeyRight})
 	if dialog.ActiveSection() != ConfigSectionDatabase {
 		t.Fatalf("section after right = %v, want database", dialog.ActiveSection())
@@ -23,6 +25,7 @@ func TestConfigDialogUpdateSwitchesSections(t *testing.T) {
 		t.Fatalf("focus after section switch = %d, want 0", dialog.FocusIndex())
 	}
 
+	dialog.setFocus(dialog.saveIndex())
 	dialog.Update(tea.KeyMsg{Type: tea.KeyLeft})
 	if dialog.ActiveSection() != ConfigSectionAuth {
 		t.Fatalf("section after left = %v, want auth", dialog.ActiveSection())
@@ -73,5 +76,80 @@ func TestConfigDialogToConfigPreservesExistingAndAppliesDatabaseEdits(t *testing
 	}
 	if !reflect.DeepEqual(got.Cors, existing.Cors) {
 		t.Fatalf("cors changed unexpectedly: got %+v want %+v", got.Cors, existing.Cors)
+	}
+}
+
+func TestConfigDialogViewWrapsLongValuesInsideFieldBoxes(t *testing.T) {
+	dialog := NewConfigDialog(&config.Config{
+		Username:   "2400011506",
+		Password:   "abcdefghijklmnopqrstuvwxyz",
+		SecretKey:  "1234567890abcdef",
+		DeviceUUID: "UID_1903fec8-eb6a-41a3-8a0a-75cf31d48b8e",
+	})
+
+	output := stripANSI(dialog.View(80, 40))
+	expected := []string{
+		"│用户名: 2400011506",
+		"│密码: **************************",
+		"│SecretKey: ****************",
+		"│DeviceUUID: UID_1903fec8-eb6a-41a3-8a0a-",
+		"│            75cf31d48b8e",
+	}
+	for _, want := range expected {
+		if !strings.Contains(output, want) {
+			t.Fatalf("config dialog output missing %q\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("config dialog should not render plaintext secret, got:\n%s", output)
+	}
+}
+
+func TestConfigDialogViewWrapsLongDatabaseValues(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Database.Type = "postgres"
+	cfg.Database.DSN = "postgres://treehole:password@10.129.246.201:5432/treehole_db?sslmode=disable&application_name=treehole-tui"
+
+	dialog := NewConfigDialog(cfg)
+	dialog.switchSection(ConfigSectionDatabase)
+	dialog.setFocus(8)
+
+	output := stripANSI(dialog.View(80, 40))
+	if !strings.Contains(output, "│DSN: postgres://treehole:password@10.129") {
+		t.Fatalf("database DSN first wrapped line missing, got:\n%s", output)
+	}
+	if !strings.Contains(output, "│     .246.201:5432/treehole_db?sslmode=d") {
+		t.Fatalf("database DSN continuation line missing, got:\n%s", output)
+	}
+	if !strings.Contains(output, "│     isable&application_name=treehole-tu") || !strings.Contains(output, "│     i") {
+		t.Fatalf("database DSN final continuation line missing, got:\n%s", output)
+	}
+}
+
+func TestConfigDialogUpdateAllowsHorizontalCursorMovementWithinField(t *testing.T) {
+	dialog := NewConfigDialog(&config.Config{Username: "abc"})
+
+	dialog.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	dialog.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+
+	if got := dialog.Username(); got != "abXc" {
+		t.Fatalf("username after cursor move edit = %q, want %q", got, "abXc")
+	}
+	if dialog.ActiveSection() != ConfigSectionAuth {
+		t.Fatalf("section changed unexpectedly: %v", dialog.ActiveSection())
+	}
+}
+
+func TestConfigDialogViewScrollsFocusedFieldIntoViewport(t *testing.T) {
+	dialog := NewConfigDialog(&config.Config{})
+	dialog.switchSection(ConfigSectionDatabase)
+	dialog.setFocus(dialog.saveIndex())
+
+	output := stripANSI(dialog.View(80, 18))
+	if dialog.formViewport.YOffset == 0 {
+		t.Fatalf("expected form viewport to scroll for save button focus")
+	}
+	if !strings.Contains(output, "保存配置") {
+		t.Fatalf("expected save button to remain visible after scrolling, got:\n%s", output)
 	}
 }
