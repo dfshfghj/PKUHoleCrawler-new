@@ -163,15 +163,13 @@ func applyTheme(mode string) {
 	colorWarning = palette.warning
 
 	baseStyle = lipgloss.NewStyle().
-		Foreground(colorText).
-		Background(colorBg)
+		Foreground(colorText)
 
 	tabBarStyle = lipgloss.NewStyle().
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorBorder).
 		BorderBottom(true).
-		Padding(0, 1).
-		Background(colorBg)
+		Padding(0, 1)
 
 	tabItemStyle = lipgloss.NewStyle().
 		Padding(0, 2).
@@ -180,8 +178,7 @@ func applyTheme(mode string) {
 	tabItemActiveStyle = lipgloss.NewStyle().
 		Padding(0, 2).
 		Foreground(colorAccent).
-		Bold(true).
-		Background(colorAccentSoft)
+		Bold(true)
 
 	contentStyle = lipgloss.NewStyle().
 		Padding(1, 2)
@@ -191,8 +188,7 @@ func applyTheme(mode string) {
 		Border(lipgloss.NormalBorder()).
 		BorderForeground(colorBorder).
 		BorderTop(true).
-		Padding(0, 1).
-		Background(colorBg)
+		Padding(0, 1)
 
 	vTitleStyle = lipgloss.NewStyle().
 		Foreground(colorText).
@@ -226,14 +222,12 @@ func applyTheme(mode string) {
 	vStatusCard = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
-		Padding(1, 2).
-		Background(colorSurface)
+		Padding(1, 2)
 
 	vStatsCard = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
-		Padding(1, 2).
-		Background(colorSurface)
+		Padding(1, 2)
 
 	vStatLabelStyle = lipgloss.NewStyle().
 		Foreground(colorMuted)
@@ -273,7 +267,6 @@ func applyTheme(mode string) {
 
 	vButtonDisabled = lipgloss.NewStyle().
 		Foreground(colorBorder).
-		Background(colorSurface).
 		Padding(0, 2).
 		Margin(0, 1)
 
@@ -291,7 +284,6 @@ func applyTheme(mode string) {
 
 	vListItemSelectedStyle = lipgloss.NewStyle().
 		Foreground(colorAccent).
-		Background(colorAccentSoft).
 		Padding(0, 1).
 		Bold(true)
 
@@ -333,13 +325,13 @@ func applyTheme(mode string) {
 		Foreground(colorMuted)
 
 	vPostTimeStyle = lipgloss.NewStyle().
-		Foreground(colorSuccess)
+		Foreground(colorLink)
 
 	vPostReplyStyle = lipgloss.NewStyle().
-		Foreground(colorWarning)
+		Foreground(colorLink)
 
 	vPostLikeStyle = lipgloss.NewStyle().
-		Foreground(colorAccent)
+		Foreground(colorLink)
 
 	vCommentQuoteStyle = lipgloss.NewStyle().
 		Foreground(colorMuted).
@@ -348,15 +340,14 @@ func applyTheme(mode string) {
 		Padding(0, 0, 0, 1)
 
 	vCommentMetaTimeStyle = lipgloss.NewStyle().
-		Foreground(colorSuccess)
+		Foreground(colorLink)
 
 	vCommentAuthorStyle = lipgloss.NewStyle().
-		Foreground(colorAccent).
+		Foreground(colorText).
 		Bold(true)
 
 	vCommentSelectedStyle = lipgloss.NewStyle().
 		Foreground(colorText).
-		Background(colorAccentSoft).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorAccent).
 		Padding(0, 0, 0, 1)
@@ -414,7 +405,6 @@ func applyTheme(mode string) {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 3).
-		Background(colorBg).
 		Width(70)
 }
 
@@ -436,16 +426,16 @@ func paletteForTheme(mode string) themePalette {
 	if shouldUseDarkTheme(mode) {
 		return themePalette{
 			bg:           lipgloss.Color("#000000"),
-			surface:      lipgloss.Color("#1A1A1A"),
+			surface:      lipgloss.Color("#000000"),
 			border:       lipgloss.Color("#4A4A4A"),
 			muted:        lipgloss.Color("#888888"),
 			textSoft:     lipgloss.Color("#B0B0B0"),
 			text:         lipgloss.Color("#FFFFFF"),
-			accent:       lipgloss.Color("#FF69B4"),
-			accentStrong: lipgloss.Color("#CC5588"),
+			accent:       lipgloss.Color("#ff78bb"),
+			accentStrong: lipgloss.Color("#c8618d"),
 			accentSoft:   lipgloss.Color("#2A1520"),
 			accentText:   lipgloss.Color("#000000"),
-			link:         lipgloss.Color("#87CEEB"),
+			link:         lipgloss.Color("#fe9fcf"),
 			success:      lipgloss.Color("#90EE90"),
 			warning:      lipgloss.Color("#FFA500"),
 		}
@@ -458,11 +448,11 @@ func paletteForTheme(mode string) themePalette {
 		muted:        lipgloss.Color("#7F6A63"),
 		textSoft:     lipgloss.Color("#5E4741"),
 		text:         lipgloss.Color("#241916"),
-		accent:       lipgloss.Color("#CC4C8A"),
-		accentStrong: lipgloss.Color("#A63A6E"),
+		accent:       lipgloss.Color("#b8467d"),
+		accentStrong: lipgloss.Color("#8b325d"),
 		accentSoft:   lipgloss.Color("#F4DCE7"),
 		accentText:   lipgloss.Color("#FFF9F2"),
-		link:         lipgloss.Color("#2E6F9E"),
+		link:         lipgloss.Color("#92657b"),
 		success:      lipgloss.Color("#2F7D57"),
 		warning:      lipgloss.Color("#A65A00"),
 	}

@@ -140,7 +140,6 @@ func (h HomePageModel) View(width, height int) string {
 		lipgloss.Left,
 		lipgloss.Top,
 		b.String(),
-		lipgloss.WithWhitespaceBackground(colorBg),
 	)
 }
 
@@ -153,7 +152,6 @@ func compactCardStyle(width int) lipgloss.Style {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBorder).
 		Padding(0, 1).
-		Background(colorSurface).
 		Width(contentWidth)
 }
 

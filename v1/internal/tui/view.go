@@ -50,7 +50,6 @@ func (m Model) View() string {
 		Width(w).
 		Align(lipgloss.Right).
 		Foreground(colorMuted).
-		Background(colorBg).
 		Render(truncateVisibleLine(footerText, w, "..."))
 
 	contentHeight := m.contentAreaHeightForSize(w, h)
@@ -61,7 +60,6 @@ func (m Model) View() string {
 		lipgloss.Left,
 		lipgloss.Top,
 		content,
-		lipgloss.WithWhitespaceBackground(colorBg),
 	)
 
 	body := lipgloss.JoinVertical(lipgloss.Left, tabBar, contentBlock, footer)
@@ -69,8 +67,7 @@ func (m Model) View() string {
 	// Dialog overlay
 	if m.Dialog != DialogNone {
 		dialog := m.renderDialog()
-		body = lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog,
-			lipgloss.WithWhitespaceBackground(colorBg))
+		body = lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, dialog)
 	}
 
 	rendered := lipgloss.Place(
@@ -79,7 +76,6 @@ func (m Model) View() string {
 		lipgloss.Left,
 		lipgloss.Top,
 		body,
-		lipgloss.WithWhitespaceBackground(colorBg),
 	)
 	rendered = baseStyle.Render(rendered)
 	if m.Capture != nil {

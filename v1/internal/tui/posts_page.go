@@ -295,7 +295,6 @@ func (p PostsPageModel) buildPostListContent(contentWidth int) string {
 		Foreground(colorAccent).
 		Bold(true).
 		Padding(0, 0, 0, 1).
-		Background(colorBg).
 		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorAccent).
 		Render
