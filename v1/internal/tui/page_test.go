@@ -1442,7 +1442,7 @@ func TestViewHelpDialogStrippedLines(t *testing.T) {
 	lines := visibleLines(output)
 
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"快捷键帮助", "打开/关闭此帮助菜单", "打开配置管理", "搜索帖子", "刷新", "Esc", "关闭"}
+	expectedContent := []string{"快捷键帮助", "打开/关闭此帮助菜单", "打开配置管理", "Ctrl+Q", "搜索帖子", "打开标签筛选", "点赞 / 取消点赞", "发评论", "引用当前选中评论", "Esc", "关闭"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)

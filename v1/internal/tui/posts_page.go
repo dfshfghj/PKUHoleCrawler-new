@@ -37,6 +37,7 @@ type PostsPageModel struct {
 	CommentViewport    *viewport.Model
 	commentContent     string
 	DetailFocus        DetailFocus
+	SelectedCommentIdx int
 
 	PostsMode    PostsMode
 	Searching    bool
@@ -54,13 +55,14 @@ func NewPostsPageModel() PostsPageModel {
 	bv := viewport.New(0, 0)
 	cv := viewport.New(0, 0)
 	return PostsPageModel{
-		PostPerPage:      20,
-		PostViewport:     &pv,
-		PostBodyViewport: &bv,
-		CommentViewport:  &cv,
-		CommentSortAsc:   true,
-		PostsMode:        PostsModeList,
-		DetailFocus:      DetailFocusComments,
+		PostPerPage:        20,
+		PostViewport:       &pv,
+		PostBodyViewport:   &bv,
+		CommentViewport:    &cv,
+		CommentSortAsc:     true,
+		PostsMode:          PostsModeList,
+		DetailFocus:        DetailFocusComments,
+		SelectedCommentIdx: 0,
 	}
 }
 
@@ -153,7 +155,7 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	searchStyle := vSearchInput.Width(maxInt(1, pageWidth-vSearchInput.GetHorizontalFrameSize()))
 	searchFocusedStyle := vSearchInputFocused.Width(maxInt(1, pageWidth-vSearchInputFocused.GetHorizontalFrameSize()))
 	if p.Searching {
-		searchLabel = "输入关键词: " + p.SearchInput
+		searchLabel = "keyword | #pid: " + p.SearchInput
 		b.WriteString(searchFocusedStyle.Render(searchLabel))
 	} else {
 		b.WriteString(searchStyle.Render(searchLabel))
@@ -187,7 +189,7 @@ func (p PostsPageModel) renderPosts(width, height int) string {
 	if !p.CanWrite {
 		postAction = "n: 发帖(不可用)"
 	}
-	status := fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | t: 标签 | %s | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", postAction, len(p.PostList))
+	status := fmt.Sprintf("↑↓: 选择 | Enter: 查看 | /: 搜索 | t: 标签 | p/f: 赞/关 | %s | r: 刷新 | PgUp/PgDn: 快滚 | 已加载 %d", postAction, len(p.PostList))
 	if p.PostListLoading {
 		status += " | 正在加载更多..."
 	}
@@ -329,22 +331,27 @@ func (p PostsPageModel) buildCommentContent(contentWidth int) string {
 			content.WriteString("\n")
 		}
 
+		prefix := "  "
+		if i == p.SelectedCommentIdx {
+			prefix = "▸ "
+		}
+
 		cName := c.NameTag
 		if cName == "" {
 			cName = "匿名"
 		}
 		cTs := time.Unix(int64(c.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
-		content.WriteString(cTs)
+		content.WriteString(prefix + cTs)
 		content.WriteString("\n")
 		if quotePreview := p.commentQuotePreview(c, textWidth); quotePreview != "" {
-			content.WriteString("  " + vCommentQuoteStyle.Width(textWidth).Render(quotePreview) + "\n")
+			content.WriteString(prefix + vCommentQuoteStyle.Width(textWidth).Render(quotePreview) + "\n")
 		}
 		commentLines := p.wrapPlainTextLines(p.commentDisplayText(c, cName), textWidth)
 		for j, line := range commentLines {
 			if j > 0 {
 				content.WriteString("\n")
 			}
-			content.WriteString("  " + line)
+			content.WriteString(prefix + line)
 		}
 	}
 	if p.CommentListError != "" {
@@ -631,11 +638,12 @@ func (p *PostsPageModel) resetComments() {
 	p.CommentListError = ""
 	p.CommentSortAsc = true
 	p.commentContent = ""
+	p.SelectedCommentIdx = 0
 	p.CommentViewport.GotoTop()
 }
 
 func (p *PostsPageModel) calcPostViewportHeight(height int) int {
-	titleLines := 1
+	titleLines := 3
 	searchLines := 3
 	paginationLines := 2
 	avail := height - titleLines - searchLines - paginationLines
@@ -739,9 +747,9 @@ func (p PostsPageModel) detailCommentsTitle() string {
 }
 
 func (p PostsPageModel) detailShortcutText() string {
-	shortcuts := []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c: 赞/关/评", "Esc: 返回", "PgUp/PgDn"}
+	shortcuts := []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c/q: 赞/关/评/引", "Esc: 返回", "PgUp/PgDn"}
 	if !p.CanWrite {
-		shortcuts = []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c: 不可用", "Esc: 返回", "PgUp/PgDn", "只读"}
+		shortcuts = []string{"Tab: 切换正文/评论", "s: 排序", "p/f/c/q: 不可用", "Esc: 返回", "PgUp/PgDn", "只读"}
 	}
 	return strings.Join(shortcuts, " | ")
 }
@@ -935,8 +943,9 @@ func (p PostsPageModel) commentBodyTextWidth(contentWidth int) int {
 func (p PostsPageModel) postHeader(post models.Post) string {
 	ts := time.Unix(int64(post.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
 	replyStr := vPostReplyStyle.Render(fmt.Sprintf("回复:%d", post.Reply))
-	likeStr := vPostLikeStyle.Render(fmt.Sprintf("赞:%d", post.Likenum))
-	meta := replyStr + " " + likeStr
+	praiseStr := vPostLikeStyle.Render(fmt.Sprintf("赞:%d", post.PraiseNum))
+	followStr := vPostLikeStyle.Render(fmt.Sprintf("关:%d", post.Likenum))
+	meta := replyStr + " " + praiseStr + " " + followStr
 	pidStr := vPostPidStyle.Render(fmt.Sprintf("#%-6d", post.Pid))
 	tsStr := vPostTimeStyle.Render(ts)
 	if !post.Anonymous {
@@ -947,9 +956,9 @@ func (p PostsPageModel) postHeader(post models.Post) string {
 
 func (p PostsPageModel) postHeaderPlain(post models.Post) string {
 	ts := time.Unix(int64(post.Timestamp), 0).In(shanghaiLocation).Format("2006-01-02 15:04")
-	header := fmt.Sprintf("#%-6d %s  回复:%d 赞:%d", post.Pid, ts, post.Reply, post.Likenum)
+	header := fmt.Sprintf("#%-6d %s  回复:%d 赞:%d 关:%d", post.Pid, ts, post.Reply, post.PraiseNum, post.Likenum)
 	if !post.Anonymous {
-		header = fmt.Sprintf("#%-6d [实名] %s  回复:%d 赞:%d", post.Pid, ts, post.Reply, post.Likenum)
+		header = fmt.Sprintf("#%-6d [实名] %s  回复:%d 赞:%d 关:%d", post.Pid, ts, post.Reply, post.PraiseNum, post.Likenum)
 	}
 	return header
 }
@@ -1044,4 +1053,91 @@ func truncateVisibleLine(line string, width int, suffix string) string {
 		currentWidth += runeWidth
 	}
 	return string(current) + suffix
+}
+
+func (p *PostsPageModel) moveCommentSelection(delta int) {
+	if len(p.CommentList) == 0 {
+		return
+	}
+	p.SelectedCommentIdx = clampInt(p.SelectedCommentIdx+delta, 0, len(p.CommentList)-1)
+	p.scrollSelectedCommentIntoView()
+}
+
+func (p *PostsPageModel) scrollSelectedCommentIntoView() {
+	if p.CommentViewport == nil || len(p.CommentList) == 0 {
+		return
+	}
+	start, end := p.commentLineRangeAt(p.SelectedCommentIdx)
+	visible := p.CommentViewport.VisibleLineCount()
+	if visible <= 0 {
+		return
+	}
+	if start < p.CommentViewport.YOffset {
+		p.CommentViewport.SetYOffset(start)
+		return
+	}
+	bottom := p.CommentViewport.YOffset + visible - 1
+	if end > bottom {
+		p.CommentViewport.SetYOffset(maxInt(0, end-visible+1))
+	}
+}
+
+func (p *PostsPageModel) commentLineRangeAt(index int) (int, int) {
+	if index < 0 || index >= len(p.CommentList) {
+		return 0, 0
+	}
+	line := 0
+	width := 20
+	if p.CommentViewport != nil && p.CommentViewport.Width > 0 {
+		width = p.CommentViewport.Width
+	}
+	textWidth := p.commentBodyTextWidth(width)
+	for i, c := range p.orderedComments() {
+		if i > 0 {
+			line++
+		}
+		start := line
+		line++
+		if p.commentQuotePreview(c, textWidth) != "" {
+			line++
+		}
+		name := c.NameTag
+		if name == "" {
+			name = "匿名"
+		}
+		line += len(p.wrapPlainTextLines(p.commentDisplayText(c, name), textWidth))
+		if i == index {
+			return start, line - 1
+		}
+	}
+	return 0, 0
+}
+
+func (p *PostsPageModel) SelectedPost() *models.Post {
+	if p.SelectedPostIdx < 0 || p.SelectedPostIdx >= len(p.PostList) {
+		return nil
+	}
+	post := p.PostList[p.SelectedPostIdx]
+	return &post
+}
+
+func (p *PostsPageModel) SelectedComment() *models.Comment {
+	if p.SelectedCommentIdx < 0 || p.SelectedCommentIdx >= len(p.CommentList) {
+		return nil
+	}
+	comment := p.CommentList[p.SelectedCommentIdx]
+	return &comment
+}
+
+func (p *PostsPageModel) updatePost(updated *models.Post) {
+	if updated == nil {
+		return
+	}
+	for i := range p.PostList {
+		if p.PostList[i].Pid == updated.Pid {
+			p.PostList[i] = *updated
+			p.postContent = ""
+			break
+		}
+	}
 }

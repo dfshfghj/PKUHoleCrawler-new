@@ -122,6 +122,7 @@ type SessionRefreshMsg struct {
 type ActionResultMsg struct {
 	Kind    string
 	Message string
+	Post    *models.Post
 	Error   error
 }
 

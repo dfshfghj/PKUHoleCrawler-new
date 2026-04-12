@@ -96,6 +96,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Posts.CommentListError = ""
 			if msg.RequestCursor == 0 {
 				m.Posts.CommentList = msg.Comments
+				m.Posts.SelectedCommentIdx = 0
 				m.Posts.CommentViewport.GotoTop()
 			} else {
 				m.Posts.CommentList = append(m.Posts.CommentList, msg.Comments...)
@@ -141,6 +142,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.Posts.CommentListError = ""
 			m.Posts.CurrentPost = msg.Post
 			m.Posts.CommentList = msg.Comments
+			m.Posts.SelectedCommentIdx = 0
 			m.Posts.CommentListCursor = msg.NextCursor
 			m.Posts.CommentListHasMore = msg.HasMore
 			m.Posts.CommentSortAsc = msg.SortAsc
@@ -202,6 +204,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.LastError = ""
 			m.Dialog = DialogNone
 			m.Posts.StatusText = msg.Message
+			if msg.Post != nil {
+				m.Posts.updatePost(msg.Post)
+				if m.Posts.CurrentPost != nil && m.Posts.CurrentPost.Pid == msg.Post.Pid {
+					m.Posts.CurrentPost = msg.Post
+				}
+			}
 			if msg.Kind == "post" {
 				m.Posts.resetList()
 				m.Posts.PostListLoading = true
@@ -233,7 +241,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if msg.String() == "q" && m.Dialog == DialogNone && !m.Posts.Searching {
+	if msg.String() == "ctrl+q" && m.Dialog == DialogNone && !m.Posts.Searching {
 		return m, tea.Quit
 	}
 
@@ -393,17 +401,33 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.Dialog = DialogComposer
 				return m, nil
 			}
+		case "q":
+			if m.Posts.CurrentPost != nil {
+				if !m.Posts.CanWrite {
+					m.setWriteUnavailableStatus()
+					return m, nil
+				}
+				quoted := m.Posts.SelectedComment()
+				if quoted == nil {
+					m.Posts.StatusText = "当前没有可引用的评论"
+					return m, nil
+				}
+				m.Composer.Configure(ComposerModeComment)
+				m.Composer.SetQuoteTarget(quoted)
+				m.Dialog = DialogComposer
+				return m, nil
+			}
 		case "up":
 			if m.Posts.DetailFocus == DetailFocusPost {
 				m.Posts.PostBodyViewport.ScrollUp(1)
 			} else {
-				m.Posts.CommentViewport.ScrollUp(1)
+				m.Posts.moveCommentSelection(-1)
 			}
 		case "down":
 			if m.Posts.DetailFocus == DetailFocusPost {
 				m.Posts.PostBodyViewport.ScrollDown(1)
 			} else {
-				m.Posts.CommentViewport.ScrollDown(1)
+				m.Posts.moveCommentSelection(1)
 				if m.Posts.CurrentPost != nil && m.Posts.shouldPrefetchCommentsMore() {
 					m.Posts.CommentListLoading = true
 					return m, loadCommentsCmd(m.Provider, m.Posts.CurrentPost.Pid, m.Posts.CommentSortAsc, m.Posts.CommentListCursor)
@@ -432,8 +456,8 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "esc":
-		if m.Posts.SearchActive {
-			return m.clearSearchResults()
+		if m.Posts.SearchActive || m.Posts.ActiveTagID != 0 {
+			return m.clearActiveFilters()
 		}
 	case "r":
 		if !m.Posts.SearchActive {
@@ -448,7 +472,7 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "t":
 		m.Dialog = DialogTags
-		if len(m.TagsDialog.tags) == 0 && m.Provider.Mode() == SessionModeOnline {
+		if len(m.TagsDialog.groups) == 0 && m.Provider.Mode() == SessionModeOnline {
 			return m, loadTagsCmd(m.Provider)
 		}
 		return m, nil
@@ -460,6 +484,22 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Composer.Configure(ComposerModePost)
 		m.Dialog = DialogComposer
 		return m, nil
+	case "p":
+		if !m.Posts.CanWrite {
+			m.setWriteUnavailableStatus()
+			return m, nil
+		}
+		if post := m.Posts.SelectedPost(); post != nil {
+			return m, togglePraiseCmd(m.Provider, post.Pid)
+		}
+	case "f":
+		if !m.Posts.CanWrite {
+			m.setWriteUnavailableStatus()
+			return m, nil
+		}
+		if post := m.Posts.SelectedPost(); post != nil {
+			return m, toggleAttentionCmd(m.Provider, post.Pid)
+		}
 	case "up":
 		m.Posts.moveCursor(-1)
 	case "down":
@@ -512,14 +552,17 @@ func (m Model) cancelSearchInput() (Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) clearSearchResults() (Model, tea.Cmd) {
+func (m Model) clearActiveFilters() (Model, tea.Cmd) {
 	m.Posts.SearchActive = false
 	m.Posts.Searching = false
 	m.Posts.SearchInput = ""
+	m.Posts.ActiveTagID = 0
+	m.Posts.ActiveTag = ""
+	m.Posts.PostsMode = PostsModeList
 	m.Posts.PostListLoading = true
 	m.Posts.resetList()
 	m.syncPostsPage()
-	return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+	return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, 0)
 }
 
 func (m *Model) syncPostsPage() {
@@ -541,9 +584,9 @@ func (m Model) handleConfigKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Dialog = DialogNone
 		return m, nil
 	}
-	if msg.Type == tea.KeyEnter && m.ConfigDialog.FocusIndex() == configSaveButtonIndex {
+	if msg.Type == tea.KeyEnter && m.ConfigDialog.IsSaveFocused() {
 		m.ConfigDialog.SetSaving(true)
-		return m, saveConfigCmd(m.ConfigDialog.ToConfig())
+		return m, saveConfigCmd(m.ConfigDialog.ToConfig(m.Config))
 	}
 	cmd := m.ConfigDialog.Update(msg)
 	return m, cmd
@@ -583,14 +626,14 @@ func (m Model) handleComposerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Dialog = DialogNone
 		return m, nil
 	}
-	if msg.Type == tea.KeyEnter {
+	if msg.String() == "ctrl+s" {
 		text := m.Composer.Value()
 		if text == "" {
 			m.Composer.SetError(errors.New("内容不能为空"))
 			return m, nil
 		}
 		if m.Composer.Mode() == ComposerModeComment && m.Posts.CurrentPost != nil {
-			return m, createCommentCmd(m.Provider, m.Posts.CurrentPost.Pid, text)
+			return m, createCommentCmd(m.Provider, m.Posts.CurrentPost.Pid, text, m.Composer.QuoteTarget())
 		}
 		return m, createPostCmd(m.Provider, text)
 	}
@@ -604,6 +647,10 @@ func (m Model) handleTagsDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	switch msg.String() {
+	case "left", "h", "backspace":
+		if m.TagsDialog.Back() {
+			return m, nil
+		}
 	case "c":
 		m.Posts.ActiveTagID = 0
 		m.Posts.ActiveTag = ""
@@ -611,6 +658,9 @@ func (m Model) handleTagsDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.Posts.PostListLoading = true
 		return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, 0)
 	case "enter":
+		if !m.TagsDialog.Enter() {
+			return m, nil
+		}
 		tag := m.TagsDialog.SelectedTag()
 		if tag != nil {
 			m.Posts.SearchActive = false
@@ -709,27 +759,37 @@ func loadTagsCmd(provider PostsProvider) tea.Cmd {
 
 func togglePraiseCmd(provider PostsProvider, pid int32) tea.Cmd {
 	return func() tea.Msg {
-		err := provider.TogglePraise(pid)
+		if err := provider.TogglePraise(pid); err != nil {
+			return ActionResultMsg{Kind: "praise", Error: err}
+		}
+		post, err := provider.RefreshPost(pid)
 		if err != nil {
 			return ActionResultMsg{Kind: "praise", Error: err}
 		}
-		return ActionResultMsg{Kind: "praise", Message: "点赞状态已刷新"}
+		return ActionResultMsg{Kind: "praise", Message: "点赞状态已刷新", Post: post}
 	}
 }
 
 func toggleAttentionCmd(provider PostsProvider, pid int32) tea.Cmd {
 	return func() tea.Msg {
-		err := provider.ToggleAttention(pid)
+		if err := provider.ToggleAttention(pid); err != nil {
+			return ActionResultMsg{Kind: "attention", Error: err}
+		}
+		post, err := provider.RefreshPost(pid)
 		if err != nil {
 			return ActionResultMsg{Kind: "attention", Error: err}
 		}
-		return ActionResultMsg{Kind: "attention", Message: "关注状态已刷新"}
+		return ActionResultMsg{Kind: "attention", Message: "关注状态已刷新", Post: post}
 	}
 }
 
-func createCommentCmd(provider PostsProvider, pid int32, text string) tea.Cmd {
+func createCommentCmd(provider PostsProvider, pid int32, text string, quote *models.Comment) tea.Cmd {
 	return func() tea.Msg {
-		err := provider.CreateComment(pid, text)
+		var quoteID *int32
+		if quote != nil {
+			quoteID = &quote.Cid
+		}
+		err := provider.CreateComment(pid, text, quoteID)
 		if err != nil {
 			return ActionResultMsg{Kind: "comment", Error: err}
 		}
@@ -797,7 +857,6 @@ func saveConfigCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		existing, err := config.LoadConfig()
 		if err == nil {
-			cfg.Database = existing.Database
 			cfg.Cors = existing.Cors
 		}
 		data, err := json.MarshalIndent(cfg, "", "    ")

@@ -35,6 +35,7 @@ type V3ListPostsParams struct {
 	Limit         int
 	CommentLimit  int
 	CommentStream int
+	Pid           int32
 	Keyword       string
 	Label         int
 	Kind          int
@@ -56,12 +57,12 @@ type CreatePostPayload struct {
 }
 
 type CreateCommentPayload struct {
-	PID          int32  `json:"pid"`
-	CommentID    string `json:"comment_id"`
-	Text         string `json:"text"`
-	MediaIDs     string `json:"media_ids"`
-	IdentityShow int    `json:"identity_show"`
-	IdentityType string `json:"identity_type"`
+	PID          int32   `json:"pid"`
+	CommentID    *string `json:"comment_id,omitempty"`
+	Text         string  `json:"text"`
+	MediaIDs     string  `json:"media_ids"`
+	IdentityShow int     `json:"identity_show"`
+	IdentityType string  `json:"identity_type"`
 }
 
 type SessionFailureKind string
@@ -161,6 +162,9 @@ func (c *Client) ListPostsV3(params V3ListPostsParams) ([]models.Post, int, erro
 	q.Set("limit", strconv.Itoa(params.Limit))
 	q.Set("comment_limit", strconv.Itoa(params.CommentLimit))
 	q.Set("comment_stream", strconv.Itoa(params.CommentStream))
+	if params.Pid > 0 {
+		q.Set("pid", strconv.Itoa(int(params.Pid)))
+	}
 	if params.Keyword != "" {
 		q.Set("keyword", params.Keyword)
 	}
@@ -291,6 +295,14 @@ func (c *Client) CreateCommentV3(payload CreateCommentPayload) (*models.Comment,
 	}
 	comment := envelope.Data.toModel()
 	return &comment, nil
+}
+
+func (c *Client) CreateCommentV3WithQuote(pid int32, text string, quoteID *int32) (*models.Comment, error) {
+	return c.CreateCommentV3(CreateCommentPayload{
+		PID:       pid,
+		CommentID: commentIDStringPtr(quoteID),
+		Text:      text,
+	})
 }
 
 func (c *Client) GetTagsTreeV3() ([]models.Tag, error) {
@@ -589,6 +601,14 @@ func jsonString(v interface{}) string {
 		return ""
 	}
 	return string(data)
+}
+
+func commentIDStringPtr(id *int32) *string {
+	if id == nil {
+		return nil
+	}
+	value := strconv.Itoa(int(*id))
+	return &value
 }
 
 func flattenTags(data interface{}, parentID int) []models.Tag {

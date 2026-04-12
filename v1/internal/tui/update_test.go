@@ -41,6 +41,8 @@ func newTestModel() Model {
 			SecretKey: "testkey",
 		}),
 		LogsDialog: NewLogsDialog(),
+		Composer:   NewComposerDialog(),
+		TagsDialog: NewTagsDialog(),
 	}
 }
 
@@ -266,11 +268,22 @@ func TestUpdateTickMsg(t *testing.T) {
 func TestHandleKeyQuit(t *testing.T) {
 	m := newTestModel()
 
-	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlQ})
 	m = result
 
 	if cmd == nil {
-		t.Error("q should trigger tea.Quit")
+		t.Error("Ctrl+Q should trigger tea.Quit")
+	}
+}
+
+func TestHandleKeyQDoesNotQuitOutsideDetail(t *testing.T) {
+	m := newTestModel()
+
+	result, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	m = result
+
+	if cmd != nil {
+		t.Error("q outside detail view should not trigger any cmd")
 	}
 }
 
@@ -659,6 +672,67 @@ func TestHandlePostsKeyRefreshDisabledDuringSearch(t *testing.T) {
 	}
 }
 
+func TestHandlePostsKeyEscClearsTagFilter(t *testing.T) {
+	m := newTestModel()
+	m.Posts.ActiveTagID = 12
+	m.Posts.ActiveTag = "课程吐槽"
+	m.Posts.PostList = []models.Post{{Pid: 1}}
+	m.Posts.PostsMode = PostsModeList
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
+	m = result
+
+	if m.Posts.ActiveTagID != 0 {
+		t.Fatalf("ActiveTagID = %d, want 0", m.Posts.ActiveTagID)
+	}
+	if m.Posts.ActiveTag != "" {
+		t.Fatalf("ActiveTag = %q, want empty", m.Posts.ActiveTag)
+	}
+	if m.Posts.SearchActive {
+		t.Fatal("SearchActive should remain false")
+	}
+	if !m.Posts.PostListLoading {
+		t.Fatal("PostListLoading should be true after clearing filters")
+	}
+	if cmd == nil {
+		t.Fatal("clearing tag filter should trigger reload")
+	}
+}
+
+func TestHandlePostsKeyEscClearsSearchAndTagFilters(t *testing.T) {
+	m := newTestModel()
+	m.Posts.SearchActive = true
+	m.Posts.SearchInput = "#123 keyword"
+	m.Posts.ActiveTagID = 7
+	m.Posts.ActiveTag = "课程学业"
+	m.Posts.PostsMode = PostsModeSearchResults
+
+	result, cmd := m.handlePostsKey(tea.KeyMsg{Type: tea.KeyEscape})
+	m = result
+
+	if m.Posts.SearchActive {
+		t.Fatal("SearchActive should be false after Escape")
+	}
+	if m.Posts.SearchInput != "" {
+		t.Fatalf("SearchInput = %q, want empty", m.Posts.SearchInput)
+	}
+	if m.Posts.ActiveTagID != 0 {
+		t.Fatalf("ActiveTagID = %d, want 0", m.Posts.ActiveTagID)
+	}
+	if m.Posts.ActiveTag != "" {
+		t.Fatalf("ActiveTag = %q, want empty", m.Posts.ActiveTag)
+	}
+	if m.Posts.PostsMode != PostsModeList {
+		t.Fatalf("PostsMode = %v, want PostsModeList", m.Posts.PostsMode)
+	}
+	if !m.Posts.PostListLoading {
+		t.Fatal("PostListLoading should be true after clearing filters")
+	}
+	if cmd == nil {
+		t.Fatal("clearing filters should trigger reload")
+	}
+}
+
 func TestHandlePostsKeyPrefetchMoreBeforeLastLine(t *testing.T) {
 	m := newTestModel()
 	m.Height = 12
@@ -762,23 +836,23 @@ func TestHandleConfigKeyNavigation(t *testing.T) {
 		t.Errorf("ConfigDialog.FocusIndex should stay at 0, got %d", m.ConfigDialog.FocusIndex())
 	}
 
-	// Enter on field < 3 moves to save button (idx 3)
+	// Enter on an input field moves focus to the save button.
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
-	if m.ConfigDialog.FocusIndex() != 3 {
-		t.Errorf("ConfigDialog.FocusIndex = %d, want 3", m.ConfigDialog.FocusIndex())
+	if m.ConfigDialog.FocusIndex() != 4 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 4", m.ConfigDialog.FocusIndex())
 	}
 
-	// From idx 3, up should go back to field 2
+	// From save, up should go back to field 3
 	m, _ = m.handleConfigKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.ConfigDialog.FocusIndex() != 2 {
-		t.Errorf("ConfigDialog.FocusIndex = %d, want 2", m.ConfigDialog.FocusIndex())
+	if m.ConfigDialog.FocusIndex() != 3 {
+		t.Errorf("ConfigDialog.FocusIndex = %d, want 3", m.ConfigDialog.FocusIndex())
 	}
 }
 
 func TestHandleConfigKeySave(t *testing.T) {
 	m := newTestModel()
 	m.Dialog = DialogConfig
-	m.ConfigDialog.setFocus(configSaveButtonIndex)
+	m.ConfigDialog.setFocus(m.ConfigDialog.saveIndex())
 
 	result, cmd := m.handleConfigKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = result
@@ -988,7 +1062,7 @@ func TestViewPostsContainsPostText(t *testing.T) {
 	m := newTestModel()
 	m.Page = PagePosts
 	m.Posts.PostList = []models.Post{
-		{Pid: 1, Text: "Hello World", Timestamp: 1000, Reply: 5, Likenum: 10, Anonymous: true},
+		{Pid: 1, Text: "Hello World", Timestamp: 1000, Reply: 5, PraiseNum: 10, Likenum: 3, Anonymous: true},
 	}
 	m.Posts.SelectedPostIdx = 0
 	m.Width = 80
@@ -1007,6 +1081,29 @@ func TestViewPostsContainsPostText(t *testing.T) {
 	}
 	if !containsStr(output, "赞:10") {
 		t.Error("View() should contain like count")
+	}
+	if !containsStr(output, "关:3") {
+		t.Error("View() should contain follow count")
+	}
+}
+
+func TestViewPostsSeparatesPraiseAndFollowCounts(t *testing.T) {
+	m := newTestModel()
+	m.Page = PagePosts
+	m.Posts.PostList = []models.Post{
+		{Pid: 1, Text: "Hello World", Timestamp: 1000, Reply: 5, PraiseNum: 0, Likenum: 9, Anonymous: true},
+	}
+	m.Posts.SelectedPostIdx = 0
+	m.Width = 80
+	m.Height = 24
+
+	output := m.View()
+
+	if !containsStr(output, "赞:0") {
+		t.Fatalf("View() should keep praise count separate from follow count, got %q", output)
+	}
+	if !containsStr(output, "关:9") {
+		t.Fatalf("View() should show follow count separately, got %q", output)
 	}
 }
 
@@ -1169,6 +1266,10 @@ func TestViewHelpDialog(t *testing.T) {
 		"打开配置管理",
 		"搜索帖子",
 		"刷新",
+		"打开标签筛选",
+		"点赞 / 取消点赞",
+		"发评论",
+		"引用当前选中评论",
 	}
 
 	for _, s := range expectedStrings {
