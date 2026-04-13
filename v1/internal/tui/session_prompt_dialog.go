@@ -31,7 +31,11 @@ func (m *SessionPromptDialogModel) ApplyState(state SessionState) {
 		if m.Message == "" {
 			m.Message = "当前登录态不可用。"
 		}
-		m.Options = []string{"重新登录", "进入离线模式"}
+		if state.NeedsConfig {
+			m.Options = []string{"打开配置", "进入离线模式"}
+		} else {
+			m.Options = []string{"重新登录", "进入离线模式"}
+		}
 	case SessionFailureReasonNetwork:
 		m.Title = "网络错误"
 		m.Message = state.Message

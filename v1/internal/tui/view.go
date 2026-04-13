@@ -29,7 +29,7 @@ func (m Model) View() string {
 	}
 
 	// Tab bar - fixed top
-	tabs := []string{"首页", "帖子"}
+	tabs := []string{"同步", "帖子"}
 	var tabItems []string
 	for i, t := range tabs {
 		if i == m.TabCursor {
@@ -124,6 +124,8 @@ func (m Model) renderDialog() string {
 		return m.renderHelpDialog()
 	case DialogSessionPrompt:
 		return m.renderDialogCard(m.SessionDialog.View(m.Width))
+	case DialogAuthChallenge:
+		return m.renderDialogCard(m.AuthDialog.View(m.Width))
 	case DialogComposer:
 		return m.renderDialogCard(m.Composer.View(m.Width))
 	case DialogTags:
@@ -182,7 +184,7 @@ func (m Model) renderHelpDialog() string {
 		{"详情页 c", "发评论"},
 		{"详情页 q", "引用当前选中评论"},
 		{"详情页 s", "评论正序/逆序切换"},
-		{"模式提示", "在线失败时会提示重新登录或进入离线模式"},
+		{"模式提示", "在线失败时会提示重新登录，短信/令牌验证会弹出输入框"},
 	}
 
 	for _, item := range helpItems {

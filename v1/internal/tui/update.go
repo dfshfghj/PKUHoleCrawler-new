@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"treehole/internal/client"
@@ -16,7 +15,6 @@ import (
 	"treehole/internal/models"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/pquerna/otp/totp"
 )
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -182,16 +180,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SessionRefreshMsg:
 		m.applySessionState(msg.State)
-		if msg.State.FailureReason != SessionFailureReasonNone {
+		if msg.State.Challenge != AuthChallengeTypeNone {
+			m.AuthDialog.ApplyState(msg.State)
+			m.Dialog = DialogAuthChallenge
+		} else if msg.State.FailureReason != SessionFailureReasonNone {
 			m.SessionDialog.ApplyState(msg.State)
 			m.Dialog = DialogSessionPrompt
-		} else if m.Dialog == DialogSessionPrompt {
+		} else if m.Dialog == DialogSessionPrompt || m.Dialog == DialogAuthChallenge {
 			m.Dialog = DialogNone
 		}
 		if msg.Error == nil && msg.State.CanReadOnline {
 			m.Posts.resetList()
 			m.Posts.PostListLoading = true
 			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+		}
+		return m, nil
+
+	case AuthChallengeResultMsg:
+		m.AuthDialog.SetSubmitting(false)
+		if msg.Error != nil {
+			m.AuthDialog.SetError(msg.Error)
+			return m, nil
+		}
+		m.applySessionState(msg.State)
+		if msg.State.CanReadOnline {
+			m.Dialog = DialogNone
+			m.Posts.resetList()
+			m.Posts.PostListLoading = true
+			return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, m.Posts.ActiveTagID)
+		}
+		m.AuthDialog.ApplyState(msg.State)
+		m.Dialog = DialogAuthChallenge
+		return m, nil
+
+	case AuthSMSSentMsg:
+		m.AuthDialog.SetSubmitting(false)
+		if msg.Error != nil {
+			m.AuthDialog.SetError(msg.Error)
+		} else {
+			m.AuthDialog.SetError(nil)
+			m.AuthDialog.SetStatus(msg.Message)
 		}
 		return m, nil
 
@@ -238,7 +266,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
-	if msg.String() == "esc" && m.Dialog != DialogNone && m.Dialog != DialogSessionPrompt {
+	if msg.String() == "esc" && m.Dialog != DialogNone && m.Dialog != DialogSessionPrompt && m.Dialog != DialogAuthChallenge {
 		m.Dialog = DialogNone
 		return m, nil
 	}
@@ -284,6 +312,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		case DialogSessionPrompt:
 			return m.handleSessionDialogKey(msg)
+		case DialogAuthChallenge:
+			return m.handleAuthChallengeKey(msg)
 		case DialogComposer:
 			return m.handleComposerKey(msg)
 		case DialogTags:
@@ -321,6 +351,20 @@ func (m Model) handlePostsKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		if !m.Posts.SearchField.Focused() {
 			_ = m.Posts.SearchField.Focus()
+			switch msg.Type {
+			case tea.KeyLeft:
+				if pos := m.Posts.SearchField.Position(); pos > 0 {
+					m.Posts.SearchField.SetCursor(pos - 1)
+				}
+				m.syncPostsPage()
+				return m, nil
+			case tea.KeyRight:
+				if pos := m.Posts.SearchField.Position(); pos < len([]rune(m.Posts.SearchField.Value())) {
+					m.Posts.SearchField.SetCursor(pos + 1)
+				}
+				m.syncPostsPage()
+				return m, nil
+			}
 		}
 		switch msg.Type {
 		case tea.KeyEscape:
@@ -607,6 +651,10 @@ func (m Model) handleSessionDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	}
 	if msg.Type == tea.KeyEnter {
 		switch m.SessionDialog.SelectedOption() {
+		case "打开配置":
+			m.Dialog = DialogConfig
+			m.ConfigDialog = NewConfigDialog(m.Config)
+			return m, loadConfigCmd()
 		case "重新登录":
 			return m, refreshSessionCmd(m.Client, m.Config)
 		case "进入离线模式", "确定":
@@ -618,6 +666,46 @@ func (m Model) handleSessionDialogKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	}
 	m.SessionDialog.Update(msg)
 	return m, nil
+}
+
+func (m Model) handleAuthChallengeKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if msg.Type == tea.KeyEscape {
+		reason := m.Session.ChallengeMessage
+		if reason == "" {
+			reason = m.Session.Message
+		}
+		m.forceOfflineMode(reason)
+		m.Dialog = DialogNone
+		m.Posts.PostListLoading = true
+		return m, loadPostsCmd(m.Provider, 0, m.Posts.PostPerPage, 0)
+	}
+	if msg.String() == "ctrl+r" && m.AuthDialog.Kind() == AuthChallengeTypeSMS {
+		m.AuthDialog.SetSubmitting(true)
+		m.AuthDialog.SetError(nil)
+		m.AuthDialog.SetStatus("")
+		m.AuthDialog.MarkSMSSent()
+		return m, sendSMSChallengeCmd(m.Client)
+	}
+	if msg.Type == tea.KeyEnter {
+		if m.AuthDialog.Kind() == AuthChallengeTypeSMS && m.AuthDialog.IsSendFocused() {
+			m.AuthDialog.SetSubmitting(true)
+			m.AuthDialog.SetError(nil)
+			m.AuthDialog.SetStatus("")
+			m.AuthDialog.MarkSMSSent()
+			return m, sendSMSChallengeCmd(m.Client)
+		}
+		code := m.AuthDialog.Value()
+		if code == "" {
+			m.AuthDialog.SetError(errors.New("验证码不能为空"))
+			return m, nil
+		}
+		m.AuthDialog.SetSubmitting(true)
+		m.AuthDialog.SetError(nil)
+		m.AuthDialog.SetStatus("")
+		return m, submitAuthChallengeCmd(m.Client, m.AuthDialog.Kind(), code)
+	}
+	cmd := m.AuthDialog.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handleComposerKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -822,7 +910,14 @@ func nextCommentCursor(comments []models.Comment) int32 {
 
 func loadLogsCmd() tea.Cmd {
 	return func() tea.Msg {
-		file, err := os.Open("crawler.log")
+		if err := config.EnsureRuntimeFiles(); err != nil {
+			return LoadLogsMsg{Error: err}
+		}
+		logPath, err := config.LogPath()
+		if err != nil {
+			return LoadLogsMsg{Error: err}
+		}
+		file, err := os.Open(logPath)
 		if err != nil {
 			return LoadLogsMsg{Error: err}
 		}
@@ -854,6 +949,9 @@ func loadConfigCmd() tea.Cmd {
 
 func saveConfigCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
+		if err := config.EnsureRuntimeFiles(); err != nil {
+			return SaveConfigMsg{Error: err}
+		}
 		existing, err := config.LoadConfig()
 		if err == nil {
 			cfg.Cors = existing.Cors
@@ -862,7 +960,11 @@ func saveConfigCmd(cfg *config.Config) tea.Cmd {
 		if err != nil {
 			return SaveConfigMsg{Error: err}
 		}
-		if err := os.WriteFile("config.json", data, 0644); err != nil {
+		configPath, err := config.ConfigPath()
+		if err != nil {
+			return SaveConfigMsg{Error: err}
+		}
+		if err := os.WriteFile(configPath, data, 0644); err != nil {
 			return SaveConfigMsg{Error: err}
 		}
 		return SaveConfigMsg{}
@@ -893,74 +995,84 @@ func refreshSessionCmd(c *client.Client, cfg *config.Config) tea.Cmd {
 }
 
 func attemptBootstrapSession(c *client.Client, cfg *config.Config) SessionState {
-	status := toTUISessionState(c.ProbeSession())
-	if status.CanReadOnline {
-		_ = c.SaveCookies()
-		return status
-	}
-	if cfg == nil {
-		return status
-	}
-	oauthResult, err := c.OAuthLogin(cfg.Username, cfg.Password)
-	if err != nil {
-		status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
-		status.Message = err.Error()
-		return status
-	}
-	token, ok := oauthResult["token"].(string)
-	if !ok || token == "" {
-		status.FailureReason = SessionFailureReasonLogin
-		status.Message = "OAuth 登录未返回 token"
-		return status
-	}
-	if err := c.SSOLogin(token); err != nil {
-		status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
-		status.Message = err.Error()
-		return status
-	}
-	status = toTUISessionState(c.ProbeSession())
-	if status.CanReadOnline {
-		_ = c.SaveCookies()
-		return status
-	}
-	if strings.Contains(status.Message, "令牌验证") {
-		totpToken, err := totp.GenerateCode(cfg.SecretKey, time.Now())
-		if err != nil {
-			status.FailureReason = SessionFailureReasonLogin
-			status.Message = err.Error()
-			return status
-		}
-		resp, err := c.LoginByToken(totpToken)
-		if err != nil {
-			status.FailureReason = failureReasonFromClient(client.ClassifySessionError(err))
-			status.Message = err.Error()
-			return status
-		}
-		resp.Body.Close()
-		status = toTUISessionState(c.ProbeSession())
-		if status.CanReadOnline {
-			_ = c.SaveCookies()
+	state := toTUISessionState(c.BootstrapSession(cfg))
+	if !state.CanReadOnline && state.Challenge == AuthChallengeTypeNone && (cfg == nil || !cfg.HasPasswordLogin()) {
+		state.FailureReason = SessionFailureReasonLogin
+		state.NeedsConfig = true
+		if state.Message == "" || state.Message == "登录态不可用" {
+			state.Message = "未检测到可用登录态，也未配置账号密码。请先打开配置填写账号密码。"
 		}
 	}
-	return status
+	return state
 }
 
-func toTUISessionState(status client.SessionStatus) SessionState {
+func submitAuthChallengeCmd(c *client.Client, kind AuthChallengeType, code string) tea.Cmd {
+	return func() tea.Msg {
+		result := c.ContinueAuthChallenge(toClientAuthChallenge(kind), code)
+		return AuthChallengeResultMsg{State: toTUISessionState(result)}
+	}
+}
+
+func sendSMSChallengeCmd(c *client.Client) tea.Cmd {
+	return func() tea.Msg {
+		if err := c.SendSMSCode(); err != nil {
+			return AuthSMSSentMsg{Error: err}
+		}
+		return AuthSMSSentMsg{Message: "验证码已发送，请查收短信"}
+	}
+}
+
+func toTUISessionState(result client.AuthBootstrapResult) SessionState {
+	status := result.Status
 	state := SessionState{
 		HasSession:     status.HasSession,
 		CanReadOnline:  status.CanReadOnline,
 		CanWriteOnline: status.CanWriteOnline,
 		Message:        status.Message,
+		Challenge:      toTUIAuthChallenge(result.Challenge),
+		ChallengeMessage: func() string {
+			if result.ChallengeReason != "" {
+				return result.ChallengeReason
+			}
+			return status.Message
+		}(),
 	}
 	if status.CanReadOnline {
 		state.Mode = SessionModeOnline
 		state.LastFallbackReason = ""
+		state.Challenge = AuthChallengeTypeNone
+		state.ChallengeMessage = ""
 		return state
 	}
 	state.Mode = SessionModeOffline
 	state.LastFallbackReason = status.Message
 	state.FailureReason = failureReasonFromClient(status.FailureKind)
+	if state.Challenge != AuthChallengeTypeNone {
+		state.FailureReason = SessionFailureReasonNone
+	}
 	return state
+}
+
+func toTUIAuthChallenge(kind client.AuthChallengeKind) AuthChallengeType {
+	switch kind {
+	case client.AuthChallengeSMS:
+		return AuthChallengeTypeSMS
+	case client.AuthChallengeOTP:
+		return AuthChallengeTypeOTP
+	default:
+		return AuthChallengeTypeNone
+	}
+}
+
+func toClientAuthChallenge(kind AuthChallengeType) client.AuthChallengeKind {
+	switch kind {
+	case AuthChallengeTypeSMS:
+		return client.AuthChallengeSMS
+	case AuthChallengeTypeOTP:
+		return client.AuthChallengeOTP
+	default:
+		return client.AuthChallengeNone
+	}
 }
 
 func failureReasonFromClient(kind client.SessionFailureKind) SessionFailureReason {
@@ -983,6 +1095,7 @@ func (m *Model) handleOnlineReadFailure(err error) {
 		FailureReason: failureReasonFromClient(client.ClassifySessionError(err)),
 		Message:       err.Error(),
 	}
+	m.Session = state
 	m.SessionDialog.ApplyState(state)
 	m.Dialog = DialogSessionPrompt
 }
@@ -1004,6 +1117,7 @@ func (m *Model) applySessionState(state SessionState) {
 		m.Home.LoggedIn = false
 	}
 	m.SessionDialog.ApplyState(state)
+	m.AuthDialog.ApplyState(state)
 	m.syncPostsPage()
 }
 

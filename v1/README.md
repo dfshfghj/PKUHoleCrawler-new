@@ -56,15 +56,21 @@ go build -o treehole ./cmd/
 
 ```json
 {
-  "username": "你的学号",
-  "password": "你的密码",
-  "secret_key": "TOTP密钥（如需二次验证）",
+  "username": "你的学号（可选；无可用 cookie 时用于重新登录）",
+  "password": "你的密码（可选；需与 username 配套）",
+  "secret_key": "TOTP密钥（可选；遇到令牌验证时自动填写）",
   "database": {
     "type": "sqlite3",
     "db_file": "./treehole.db"
   }
 }
 ```
+
+说明：
+- 程序会优先复用 `cookies.json` 中的现有登录态。
+- 若 cookie 失效，且配置了 `username` + `password`，则会自动尝试 OAuth / SSO 登录。
+- TUI 遇到“短信验证”时会弹出验证码输入框；遇到“令牌验证”但未配置 `secret_key` 时会弹出动态口令输入框。
+- crawler 为非交互模式；遇到短信验证，或遇到令牌验证但没有可用 `secret_key` 时，会直接退出并提示原因。
 
 支持两种数据库后端：
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"treehole/internal/crawler"
-	"treehole/internal/tui"
 
 	"github.com/spf13/cobra"
 )
@@ -46,7 +45,7 @@ func newFetchImagesCmd() *cobra.Command {
 			}
 			defer cleanup()
 
-			client, _, _, err := tui.InitClientForTUI()
+			client, _, err := initClientForCrawler()
 			if err != nil {
 				return err
 			}

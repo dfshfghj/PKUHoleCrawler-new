@@ -84,7 +84,7 @@ func (p *PostsPageModel) ensureInitialized() {
 	if p.PostViewport == nil || p.PostBodyViewport == nil || p.CommentViewport == nil {
 		*p = NewPostsPageModel()
 	}
-	if p.SearchField.Prompt == "" {
+	if p.SearchField.Width == 0 {
 		p.SearchField = newSearchInput()
 		p.SearchField.SetValue(p.SearchInput)
 	}

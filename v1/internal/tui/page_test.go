@@ -1007,8 +1007,8 @@ func TestViewShowsTabBarAtTop(t *testing.T) {
 		t.Fatal("No visible lines after stripping ANSI codes")
 	}
 
-	if !strings.Contains(lines[0], "首页") || !strings.Contains(lines[0], "帖子") {
-		t.Fatalf("Line[0] = %q, want tab bar with 首页 and 帖子", lines[0])
+	if !strings.Contains(lines[0], "同步") || !strings.Contains(lines[0], "帖子") {
+		t.Fatalf("Line[0] = %q, want tab bar with 同步 and 帖子", lines[0])
 	}
 }
 
@@ -1444,7 +1444,7 @@ func TestViewConfigDialogStrippedLines(t *testing.T) {
 	lines := visibleLines(output)
 
 	allText := strings.Join(lines, " ")
-	expectedContent := []string{"配置管理", "config.json", "用户名", "密码", "SecretKey"}
+	expectedContent := []string{"配置管理", "data/config.json", "用户名", "密码", "SecretKey"}
 	for _, want := range expectedContent {
 		if !strings.Contains(allText, want) {
 			t.Errorf("Missing expected content: %q", want)

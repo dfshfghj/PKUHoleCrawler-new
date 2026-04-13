@@ -26,6 +26,7 @@ const (
 	DialogLogs
 	DialogHelp
 	DialogSessionPrompt
+	DialogAuthChallenge
 	DialogComposer
 	DialogTags
 )
@@ -119,6 +120,16 @@ type SessionRefreshMsg struct {
 	Error error
 }
 
+type AuthChallengeResultMsg struct {
+	State SessionState
+	Error error
+}
+
+type AuthSMSSentMsg struct {
+	Error   error
+	Message string
+}
+
 type ActionResultMsg struct {
 	Kind    string
 	Message string
@@ -162,6 +173,14 @@ const (
 	SessionFailureReasonNetwork
 )
 
+type AuthChallengeType int
+
+const (
+	AuthChallengeTypeNone AuthChallengeType = iota
+	AuthChallengeTypeSMS
+	AuthChallengeTypeOTP
+)
+
 type SessionState struct {
 	Mode               SessionMode
 	HasSession         bool
@@ -170,6 +189,9 @@ type SessionState struct {
 	FailureReason      SessionFailureReason
 	Message            string
 	LastFallbackReason string
+	NeedsConfig        bool
+	Challenge          AuthChallengeType
+	ChallengeMessage   string
 }
 
 type Model struct {
@@ -192,6 +214,7 @@ type Model struct {
 	ConfigDialog  ConfigDialogModel
 	LogsDialog    LogsDialogModel
 	SessionDialog SessionPromptDialogModel
+	AuthDialog    AuthChallengeDialogModel
 	Composer      ComposerDialogModel
 	TagsDialog    TagsDialogModel
 
@@ -212,7 +235,10 @@ func NewModel(database *db.Database, client *client.Client, cfg *config.Config, 
 
 	dialog := DialogNone
 	sessionDialog := NewSessionPromptDialog(session)
-	if session.FailureReason != SessionFailureReasonNone {
+	authDialog := NewAuthChallengeDialog(session)
+	if session.Challenge != AuthChallengeTypeNone {
+		dialog = DialogAuthChallenge
+	} else if session.FailureReason != SessionFailureReasonNone {
 		dialog = DialogSessionPrompt
 	}
 
@@ -230,6 +256,7 @@ func NewModel(database *db.Database, client *client.Client, cfg *config.Config, 
 		ConfigDialog:  NewConfigDialog(cfg),
 		LogsDialog:    NewLogsDialog(),
 		SessionDialog: sessionDialog,
+		AuthDialog:    authDialog,
 		Composer:      NewComposerDialog(),
 		TagsDialog:    NewTagsDialog(),
 	}
@@ -264,6 +291,9 @@ func (m *Model) ensureDialogModels() {
 	}
 	if !m.SessionDialog.initialized() {
 		m.SessionDialog = NewSessionPromptDialog(m.Session)
+	}
+	if !m.AuthDialog.initialized() {
+		m.AuthDialog = NewAuthChallengeDialog(m.Session)
 	}
 	if !m.Composer.initialized() {
 		m.Composer = NewComposerDialog()

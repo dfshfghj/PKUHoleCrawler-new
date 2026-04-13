@@ -10,11 +10,12 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"treehole/internal/config"
 )
 
 type TreeHoleWeb string
@@ -433,6 +434,9 @@ func (c *Client) GetGrade() (*http.Response, error) {
 }
 
 func (c *Client) SaveCookies() error {
+	if err := config.EnsureRuntimeFiles(); err != nil {
+		return err
+	}
 	cookies := c.httpClient.Jar.Cookies(&url.URL{Scheme: "https", Host: "treehole.pku.edu.cn"})
 
 	var cookiesList []map[string]interface{}
@@ -450,11 +454,10 @@ func (c *Client) SaveCookies() error {
 		cookiesList = append(cookiesList, cookieMap)
 	}
 
-	currentDir, err := os.Getwd()
+	cookiePath, err := config.CookiesPath()
 	if err != nil {
 		return err
 	}
-	cookiePath := filepath.Join(currentDir, "cookies.json")
 
 	file, err := os.Create(cookiePath)
 	if err != nil {
@@ -468,11 +471,13 @@ func (c *Client) SaveCookies() error {
 }
 
 func (c *Client) LoadCookies() error {
-	currentDir, err := os.Getwd()
+	if err := config.EnsureRuntimeFiles(); err != nil {
+		return err
+	}
+	cookiePath, err := config.CookiesPath()
 	if err != nil {
 		return err
 	}
-	cookiePath := filepath.Join(currentDir, "cookies.json")
 
 	file, err := os.Open(cookiePath)
 	if err != nil {

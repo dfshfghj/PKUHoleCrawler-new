@@ -10,11 +10,14 @@ import (
 func writeTempConfig(t *testing.T, cfg map[string]interface{}) string {
 	t.Helper()
 	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "data"), 0755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	err = os.WriteFile(filepath.Join(dir, "config.json"), data, 0644)
+	err = os.WriteFile(filepath.Join(dir, "data", "config.json"), data, 0644)
 	if err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -46,7 +49,7 @@ func TestLoadConfigValid(t *testing.T) {
 	}
 }
 
-func TestLoadConfigMissingFields(t *testing.T) {
+func TestLoadConfigAllowsPartialAuthFields(t *testing.T) {
 	dir := writeTempConfig(t, map[string]interface{}{
 		"username":   "",
 		"password":   "pass",
@@ -56,21 +59,123 @@ func TestLoadConfigMissingFields(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(origDir)
 
-	_, err := LoadConfig()
-	if err == nil {
-		t.Fatal("LoadConfig() expected error for empty username")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.HasPasswordLogin() {
+		t.Fatal("HasPasswordLogin() = true, want false for missing username")
+	}
+}
+
+func TestConfigAuthCapabilityHelpers(t *testing.T) {
+	cfg := &Config{Username: "user", Password: "pass"}
+	if !cfg.HasPasswordLogin() {
+		t.Fatal("HasPasswordLogin() = false, want true")
+	}
+	if cfg.HasTOTPSecret() {
+		t.Fatal("HasTOTPSecret() = true, want false")
+	}
+	cfg.SecretKey = "secret"
+	if !cfg.HasTOTPSecret() {
+		t.Fatal("HasTOTPSecret() = false, want true")
 	}
 }
 
 func TestLoadConfigNoFile(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "data"), 0755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
 	origDir, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(origDir)
 
-	_, err := LoadConfig()
-	if err == nil {
-		t.Fatal("LoadConfig() expected error when config.json missing")
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig() error: %v", err)
+	}
+	if cfg.Database.Type != "sqlite3" {
+		t.Fatalf("Database.Type = %q, want sqlite3", cfg.Database.Type)
+	}
+	if cfg.Database.DBFile != "./treehole.db" {
+		t.Fatalf("Database.DBFile = %q, want ./treehole.db", cfg.Database.DBFile)
+	}
+}
+
+func TestEnsureRuntimeFilesCreatesDefaults(t *testing.T) {
+	dir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := EnsureRuntimeFiles(); err != nil {
+		t.Fatalf("EnsureRuntimeFiles() error: %v", err)
+	}
+
+	configPath := filepath.Join(dir, "data", "config.json")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("stat data/config.json: %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(configData, &cfg); err != nil {
+		t.Fatalf("unmarshal data/config.json: %v", err)
+	}
+	if cfg.Database.Type != "sqlite3" || cfg.Database.DBFile != "./treehole.db" {
+		t.Fatalf("default config = %+v", cfg.Database)
+	}
+	cookiesData, err := os.ReadFile(filepath.Join(dir, "data", "cookies.json"))
+	if err != nil {
+		t.Fatalf("read data/cookies.json: %v", err)
+	}
+	if string(cookiesData) != "[]\n" {
+		t.Fatalf("cookies content = %q, want []\\n", string(cookiesData))
+	}
+}
+
+func TestEnsureRuntimeFilesMigratesLegacyFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "data"), 0755); err != nil {
+		t.Fatalf("mkdir data: %v", err)
+	}
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{\"username\":\"legacy-migrated\"}\n"), 0644); err != nil {
+		t.Fatalf("write legacy config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cookies.json"), []byte("[{\"name\":\"token\"}]\n"), 0644); err != nil {
+		t.Fatalf("write legacy cookies: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "crawler.log"), []byte("legacy log\n"), 0644); err != nil {
+		t.Fatalf("write legacy crawler.log: %v", err)
+	}
+
+	if err := EnsureRuntimeFiles(); err != nil {
+		t.Fatalf("EnsureRuntimeFiles() error: %v", err)
+	}
+
+	for _, name := range []string{"config.json", "cookies.json", "crawler.log"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("legacy %s should be moved, stat err=%v", name, err)
+		}
+	}
+
+	configData, err := os.ReadFile(filepath.Join(dir, "data", "config.json"))
+	if err != nil {
+		t.Fatalf("read migrated config: %v", err)
+	}
+	if string(configData) != "{\"username\":\"legacy-migrated\"}\n" {
+		t.Fatalf("migrated config = %q", string(configData))
+	}
+	logData, err := os.ReadFile(filepath.Join(dir, "data", "crawler.log"))
+	if err != nil {
+		t.Fatalf("read migrated log: %v", err)
+	}
+	if string(logData) != "legacy log\n" {
+		t.Fatalf("migrated log = %q", string(logData))
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"treehole/internal/client"
 	"treehole/internal/config"
 	"treehole/internal/crawler"
 	"treehole/internal/db"
@@ -18,7 +19,16 @@ import (
 )
 
 func init() {
-	logFile, err := os.OpenFile("crawler.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err := config.EnsureRuntimeFiles(); err != nil {
+		log.Printf("[Init] 初始化 data 目录失败: %v", err)
+		return
+	}
+	logPath, err := config.LogPath()
+	if err != nil {
+		log.Printf("[Init] 解析日志路径失败: %v", err)
+		return
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err == nil {
 		log.SetOutput(logFile)
 		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
@@ -114,6 +124,41 @@ func runTUI() error {
 	return nil
 }
 
+func initClientForCrawler() (*client.Client, *config.Config, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("加载配置文件失败: %w", err)
+	}
+
+	c, err := client.NewClient(cfg.DeviceUUID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("初始化客户端失败: %w", err)
+	}
+
+	result := c.BootstrapSession(cfg)
+	if result.Status.CanReadOnline {
+		return c, cfg, nil
+	}
+
+	switch result.Challenge {
+	case client.AuthChallengeSMS:
+		return nil, nil, fmt.Errorf("登录需要短信验证，crawler 不支持交互式短信验证")
+	case client.AuthChallengeOTP:
+		if !cfg.HasTOTPSecret() {
+			return nil, nil, fmt.Errorf("登录需要令牌验证，但未配置 secret_key")
+		}
+		return nil, nil, fmt.Errorf("令牌验证未完成: %s", result.ChallengeReason)
+	default:
+		if !result.LoginAttempted && !cfg.HasPasswordLogin() {
+			return nil, nil, fmt.Errorf("没有可用登录态，且未配置 username/password")
+		}
+		if result.Status.Message != "" {
+			return nil, nil, fmt.Errorf("登录失败: %s", result.Status.Message)
+		}
+		return nil, nil, fmt.Errorf("登录失败")
+	}
+}
+
 func runDaemon() error {
 	database, cleanup, err := initDB()
 	if err != nil {
@@ -124,7 +169,7 @@ func runDaemon() error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	client, _, _, err := tui.InitClientForTUI()
+	client, _, err := initClientForCrawler()
 	if err != nil {
 		return fmt.Errorf("初始化客户端失败: %w", err)
 	}

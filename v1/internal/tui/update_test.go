@@ -41,6 +41,7 @@ func newTestModel() Model {
 			SecretKey: "testkey",
 		}),
 		LogsDialog: NewLogsDialog(),
+		AuthDialog: NewAuthChallengeDialog(SessionState{}),
 		Composer:   NewComposerDialog(),
 		TagsDialog: NewTagsDialog(),
 	}
@@ -1438,6 +1439,123 @@ func TestSessionRefreshSuccessClosesPrompt(t *testing.T) {
 	}
 	if got.Session.Mode != SessionModeOnline {
 		t.Fatalf("session mode = %v, want online", got.Session.Mode)
+	}
+}
+
+func TestSessionPromptNeedsConfigShowsOpenConfig(t *testing.T) {
+	m := newTestModel()
+	state := SessionState{
+		Mode:          SessionModeOffline,
+		FailureReason: SessionFailureReasonLogin,
+		NeedsConfig:   true,
+		Message:       "请先填写账号密码",
+	}
+
+	result, _ := m.Update(SessionRefreshMsg{State: state})
+	got := result.(Model)
+
+	if got.Dialog != DialogSessionPrompt {
+		t.Fatalf("dialog = %v, want session prompt", got.Dialog)
+	}
+	if option := got.SessionDialog.SelectedOption(); option != "打开配置" {
+		t.Fatalf("selected option = %q, want 打开配置", option)
+	}
+}
+
+func TestHandleSessionDialogOpenConfig(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogSessionPrompt
+	m.Session = SessionState{
+		Mode:          SessionModeOffline,
+		FailureReason: SessionFailureReasonLogin,
+		NeedsConfig:   true,
+		Message:       "请先填写账号密码",
+	}
+	m.SessionDialog = NewSessionPromptDialog(m.Session)
+
+	result, cmd := m.handleSessionDialogKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if result.Dialog != DialogConfig {
+		t.Fatalf("dialog = %v, want config", result.Dialog)
+	}
+	if cmd == nil {
+		t.Fatal("expected load config command")
+	}
+}
+
+func TestSessionRefreshSMSChallengeOpensAuthDialog(t *testing.T) {
+	m := newTestModel()
+
+	result, _ := m.Update(SessionRefreshMsg{State: SessionState{
+		Mode:             SessionModeOffline,
+		Challenge:        AuthChallengeTypeSMS,
+		ChallengeMessage: "需要短信验证",
+		Message:          "需要短信验证",
+	}})
+	got := result.(Model)
+
+	if got.Dialog != DialogAuthChallenge {
+		t.Fatalf("dialog = %v, want auth challenge", got.Dialog)
+	}
+	if got.AuthDialog.Kind() != AuthChallengeTypeSMS {
+		t.Fatalf("auth dialog kind = %v, want sms", got.AuthDialog.Kind())
+	}
+	if !got.AuthDialog.IsSendFocused() {
+		t.Fatal("sms auth dialog should focus send button first")
+	}
+}
+
+func TestHandleAuthChallengeEscFallsBackOffline(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogAuthChallenge
+	m.Session = SessionState{
+		Mode:             SessionModeOffline,
+		Challenge:        AuthChallengeTypeOTP,
+		ChallengeMessage: "需要令牌验证",
+	}
+	m.AuthDialog = NewAuthChallengeDialog(m.Session)
+
+	result, _ := m.handleAuthChallengeKey(tea.KeyMsg{Type: tea.KeyEscape})
+
+	if result.Dialog != DialogNone {
+		t.Fatalf("dialog = %v, want none", result.Dialog)
+	}
+	if result.Session.Mode != SessionModeOffline {
+		t.Fatalf("session mode = %v, want offline", result.Session.Mode)
+	}
+	if result.Posts.StatusText == "" {
+		t.Fatal("expected offline status text after auth challenge escape")
+	}
+}
+
+func TestAuthSMSSentMsgUpdatesDialogStatus(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogAuthChallenge
+	m.AuthDialog = NewAuthChallengeDialog(SessionState{Challenge: AuthChallengeTypeSMS})
+	m.AuthDialog.SetSubmitting(true)
+
+	result, _ := m.Update(AuthSMSSentMsg{Message: "验证码已发送"})
+	got := result.(Model)
+
+	if got.AuthDialog.statusText != "验证码已发送" {
+		t.Fatalf("status text = %q, want sent message", got.AuthDialog.statusText)
+	}
+	if got.AuthDialog.submitting {
+		t.Fatal("auth dialog should stop submitting after SMS send result")
+	}
+}
+
+func TestHandleAuthChallengeEnterOnSMSButtonSendsCode(t *testing.T) {
+	m := newTestModel()
+	m.Dialog = DialogAuthChallenge
+	m.Session = SessionState{Challenge: AuthChallengeTypeSMS}
+	m.AuthDialog = NewAuthChallengeDialog(m.Session)
+
+	_, cmd := m.handleAuthChallengeKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected send-sms command when pressing enter on send button")
+	}
+	if !m.AuthDialog.IsSendFocused() {
+		t.Fatal("send button should remain focused by default")
 	}
 }
 

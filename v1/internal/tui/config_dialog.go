@@ -423,7 +423,7 @@ func (m *ConfigDialogModel) View(width, height int) string {
 
 	b.WriteString(vDialogTitleStyle.Render("配置管理"))
 	b.WriteString("\n\n")
-	b.WriteString(vSubtitleStyle.Render("config.json / " + m.sectionTitle()))
+	b.WriteString(vSubtitleStyle.Render("data/config.json / " + m.sectionTitle()))
 	b.WriteString("\n\n")
 
 	fieldDefs := m.currentFieldDefs()

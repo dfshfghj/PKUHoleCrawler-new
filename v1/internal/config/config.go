@@ -3,6 +3,7 @@ package config
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,23 @@ import (
 var (
 	Conf *Config
 )
+
+const (
+	dataDirName     = "data"
+	configFileName  = "config.json"
+	cookiesFileName = "cookies.json"
+	logFileName     = "crawler.log"
+)
+
+type runtimePaths struct {
+	dataDir          string
+	configPath       string
+	cookiesPath      string
+	logPath          string
+	legacyConfig     string
+	legacyCookies    string
+	legacyCrawlerLog string
+}
 
 type DatabaseConfig struct {
 	Type     string `json:"type"`     // "sqlite3" or "postgres"
@@ -40,12 +58,94 @@ type Config struct {
 	Cors       CorsConfig     `json:"cors"`
 }
 
-func LoadConfig() (*Config, error) {
+func resolveRuntimePaths() (runtimePaths, error) {
 	currentDir, err := os.Getwd()
 	if err != nil {
-		return nil, fmt.Errorf("获取工作目录失败: %w", err)
+		return runtimePaths{}, fmt.Errorf("获取工作目录失败: %w", err)
 	}
-	configPath := filepath.Join(currentDir, "config.json")
+
+	dataDir := filepath.Join(currentDir, dataDirName)
+	return runtimePaths{
+		dataDir:          dataDir,
+		configPath:       filepath.Join(dataDir, configFileName),
+		cookiesPath:      filepath.Join(dataDir, cookiesFileName),
+		logPath:          filepath.Join(dataDir, logFileName),
+		legacyConfig:     filepath.Join(currentDir, configFileName),
+		legacyCookies:    filepath.Join(currentDir, cookiesFileName),
+		legacyCrawlerLog: filepath.Join(currentDir, logFileName),
+	}, nil
+}
+
+func ConfigPath() (string, error) {
+	paths, err := resolveRuntimePaths()
+	if err != nil {
+		return "", err
+	}
+	return paths.configPath, nil
+}
+
+func CookiesPath() (string, error) {
+	paths, err := resolveRuntimePaths()
+	if err != nil {
+		return "", err
+	}
+	return paths.cookiesPath, nil
+}
+
+func LogPath() (string, error) {
+	paths, err := resolveRuntimePaths()
+	if err != nil {
+		return "", err
+	}
+	return paths.logPath, nil
+}
+
+func EnsureRuntimeFiles() error {
+	paths, err := resolveRuntimePaths()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.dataDir, 0755); err != nil {
+		return fmt.Errorf("创建 data 目录失败: %w", err)
+	}
+
+	if err := moveLegacyFile(paths.legacyConfig, paths.configPath); err != nil {
+		return err
+	}
+	if err := moveLegacyFile(paths.legacyCookies, paths.cookiesPath); err != nil {
+		return err
+	}
+	if err := moveLegacyFile(paths.legacyCrawlerLog, paths.logPath); err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(paths.configPath); errors.Is(err, os.ErrNotExist) {
+		if err := writeDefaultConfig(paths.configPath); err != nil {
+			return fmt.Errorf("初始化默认配置失败: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("检查配置文件失败: %w", err)
+	}
+
+	if _, err := os.Stat(paths.cookiesPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.WriteFile(paths.cookiesPath, []byte("[]\n"), 0644); err != nil {
+			return fmt.Errorf("初始化 cookies 文件失败: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("检查 cookies 文件失败: %w", err)
+	}
+
+	return nil
+}
+
+func LoadConfig() (*Config, error) {
+	if err := EnsureRuntimeFiles(); err != nil {
+		return nil, err
+	}
+	configPath, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(configPath)
 	if err != nil {
@@ -57,10 +157,6 @@ func LoadConfig() (*Config, error) {
 	err = json.NewDecoder(file).Decode(&config)
 	if err != nil {
 		return nil, err
-	}
-
-	if config.Username == "" || config.Password == "" || config.SecretKey == "" {
-		return nil, fmt.Errorf("请填写配置文件")
 	}
 
 	// 设置默认数据库配置
@@ -97,6 +193,45 @@ func LoadConfig() (*Config, error) {
 	return &config, nil
 }
 
+func (c *Config) HasPasswordLogin() bool {
+	if c == nil {
+		return false
+	}
+	return c.Username != "" && c.Password != ""
+}
+
+func (c *Config) HasTOTPSecret() bool {
+	if c == nil {
+		return false
+	}
+	return c.SecretKey != ""
+}
+
+func DefaultConfig() Config {
+	return Config{
+		Username:   "",
+		Password:   "",
+		SecretKey:  "",
+		DeviceUUID: "",
+		Database: DatabaseConfig{
+			Type:     "sqlite3",
+			Host:     "localhost",
+			Port:     5432,
+			User:     "",
+			Password: "",
+			Name:     "",
+			DBFile:   "./treehole.db",
+			SSLMode:  "disable",
+			DSN:      "",
+		},
+		Cors: CorsConfig{
+			AllowOrigins: []string{"*"},
+			AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		},
+	}
+}
+
 func generateDeviceUUID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
@@ -123,6 +258,60 @@ func saveDeviceUUID(configPath, uuid string) error {
 	}
 
 	return os.WriteFile(configPath, data, 0644)
+}
+
+func moveLegacyFile(src, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查目标文件失败 %s: %w", dst, err)
+	}
+
+	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("检查旧文件失败 %s: %w", src, err)
+	}
+
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+
+	if err := copyFileContents(src, dst); err != nil {
+		return fmt.Errorf("迁移文件 %s -> %s 失败: %w", src, dst, err)
+	}
+	if err := os.Remove(src); err != nil {
+		return fmt.Errorf("删除旧文件 %s 失败: %w", src, err)
+	}
+	return nil
+}
+
+func copyFileContents(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+
+	if _, err := out.ReadFrom(in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func writeDefaultConfig(path string) error {
+	data, err := json.MarshalIndent(DefaultConfig(), "", "    ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0644)
 }
 
 func (c *Config) GetDatabaseDSN() (string, error) {
